@@ -1,4 +1,16 @@
-### the input need to be pre-ordered by a
+#' An internal function.
+#'
+#' This is a internal function. It shouldn't be called by the end user.
+#'
+#' @param a vector of retention time.
+#' @param mz vector of m/z ratio.
+#' @param inte vector of signal strength.
+#'
+#' @references Bioinformatics. 25(15):1930-36. BMC Bioinformatics. 11:559.
+#'
+#' @author Tianwei Yu <tyu8@emory.edu>
+#'
+#' @keywords models
 merge.seq.3 <- function(a, mz, inte) {
     l <- length(a)
     breaks <- c(0, which(a[1:(l - 1)] != a[2:l]), l)

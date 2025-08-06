@@ -1,3 +1,18 @@
+#' Removing long ridges at the same m/z.
+#'
+#' This is an internal function. It substracts a background estimated through kernel smoothing when an EIC continuously span more than half the retention time range.
+#'
+#' @param x Retetion time vector.
+#' @param y2 Intensity vector.
+#' @param bw Bandwidth for the kernel smoother. A very wide one is used here.
+#'
+#' @return A vector of intensity value is returned.
+#'
+#' @references Bioinformatics. 25(15):1930-36. BMC Bioinformatics. 11:559.
+#'
+#' @author Tianwei Yu <tyu8@emory.edu>
+#'
+#' @keywords models
 rm.ridge <- function(x, y2, bw) {
     sel <- which(y2 < quantile(y2, 0.75))
     max.x.sel <- max(x[sel])

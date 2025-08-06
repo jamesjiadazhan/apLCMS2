@@ -1,3 +1,27 @@
+#' Generates 3 dimensional plots for LCMS data.
+#'
+#' This function takes the matrix output from proc.cdf() and generates a 3D plot of the data. It relies on the rgl library.
+#'
+#' @param prof The matrix output from the proc.cdf() function.
+#' @param fill.holes A lot of peaks have missing values at some time points. If fill.holes is TRUE, the function will fill in the missing values by interpolation.
+#' @param transform If the value is "sqrt", the values are transformed by taking square root. If "cuberoot", the values are transformed by taking cubic root.
+#' @param time.lim The limit in retention time for the area of spectrum to be plotted. It should be either NA or a vector of two values: the lower limit and the upper limit.
+#' @param mz.lim The limit in m/z value for the area of spectrum to be plotted. It should be either NA or a vector of two values: the lower limit and the upper limit.
+#' @param box If a box should be drawn.
+#' @param axes If the axes should be drawn.
+#'
+#' @details The function calls the rgl library. Spectrum values within the time.lim and mz.lim range is plotted in 3D.
+#'
+#' @return There is no return value from this function.
+#'
+#' @references http://rgl.neoscientists.org/about.shtml
+#'
+#' @author Tianwei Yu <tyu8@emory.edu>
+#'
+#' @examples
+#' data(prof)
+#' present.cdf.3d(prof[[2]],time.lim=c(250,400), mz.lim=c(400,500))
+#'
 present.cdf.3d <- function(prof, fill.holes = TRUE, transform = "none", time.lim = NA, mz.lim = NA, box = TRUE, axes = TRUE) {
     fillholes <- function(times, b) {
         b <- b[order(b[, 1]), ]
@@ -84,8 +108,7 @@ present.cdf.3d <- function(prof, fill.holes = TRUE, transform = "none", time.lim
     a <- a[order(a[, 1]), ]
     a[, 1] <- 4 * (a[, 1] - 1) + 2
 
-    for (i in 1:nrow(a))
-    {
+    for (i in 1:nrow(a)) {
         b <- a[i, ]
         z[b[2], b[1]] <- z[b[2], b[1] + 1] <- b[3]
     }
@@ -93,10 +116,8 @@ present.cdf.3d <- function(prof, fill.holes = TRUE, transform = "none", time.lim
     zlim <- range(z)
 
     colorlut <- topo.colors(100)
-    # col <- colorlut[ round(log(z+1)/log(zlim[2]+1) * 99)+1 ]
     col <- colorlut[round(sqrt(z) / max(sqrt(z)) * 99) + 1]
 
-    # z<-z/max(z)*(max(masses)-min(masses))
     surface3d(times, masses, z, color = col)
     if (is.na(time.lim[1])) time.lim <- range(times)
     if (is.na(mz.lim[1])) mz.lim <- range(masses)

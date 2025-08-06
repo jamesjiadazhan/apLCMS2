@@ -1,6 +1,22 @@
-### rawname is the text file name
-### f is the output object of prof.to.features()
-### lwd is line width
+#' Plot the data in the m/z and retention time plane.
+#'
+#' This is a diagnostic function. It takes the original text file, as well as the detected feature table, and plots the data in the m/z - retention time plane, using a user-defined range. The entire data is too big to plot, thus the main purpose is to focus on small subregions of the data and check the peak detection results.
+#'
+#' @param rawname The text file name.
+#' @param f The output object of prof.to.feature().
+#' @param mzlim The m/z range to plot.
+#' @param timelim The retention time range to plot.
+#' @param lwd Line width parameter, to be passed on to the function line().
+#'
+#' @details The columns in the text file need to be separated by tab. The first column needs to be the retention time, the second column the m/z values, and the third column the intensity values. The first row needs to be the column labels, rather than values.
+#'
+#' @return There is no return value.
+#'
+#' @references Bioinformatics. 25(15):1930-36. BMC Bioinformatics. 11:559.
+#'
+#' @author Tianwei Yu <tyu8@emory.edu>
+#'
+#' @keywords models
 plot.txt.2d <- function(rawname, f, mzlim, timelim, lwd = 1) {
     ########### read the raw table
     ex.nc <- read.table(rawname, header = T, sep = "\t")

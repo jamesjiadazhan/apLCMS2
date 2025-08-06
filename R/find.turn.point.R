@@ -1,3 +1,20 @@
+#' Find peaks and valleys of a curve.
+#'
+#' This is an internal function which is not supposed to be directly accessed by the user. Finds the peaks and valleys of a smooth curve.
+#'
+#' @param y The y values of a curve in x-y plane.
+#'
+#' @details
+#'
+#' @return A list object:
+#'   \item{pks}{The peak positions.}
+#'   \item{vlys}{The valley positions}
+#'
+#' @references Bioinformatics. 25(15):1930-36. BMC Bioinformatics. 11:559.
+#'
+#' @author Tianwei Yu <tyu8@emory.edu>
+#'
+#' @keywords models
 find.turn.point <- function(y) {
     peaks2 <- function(x, ties.method) {
         z <- embed(rev(as.vector(c(-Inf, x, -Inf))), dim = 3)

@@ -1,3 +1,22 @@
+#' Loading LC/MS data.
+#'
+#' This is an internal function. It loads LC/MS data into memory.
+#'
+#' @param filename The CDF file name.
+#'
+#' @details The function uses functionality provided by the mzR package from Bioconductor.
+#'
+#' @return A list is returned.
+#'   \item{masses}{ The vector of m/z values. }
+#'   \item{labels}{ The vector of retention times. }
+#'   \item{intensi}{ The vector of intensity values. }
+#'   \item{times}{ The vector of unique time points. }
+#'
+#' @references Bioinformatics. 25(15):1930-36. BMC Bioinformatics. 11:559.
+#'
+#' @author Tianwei Yu <tyu8@emory.edu>
+#'
+#' @keywords models
 load.lcms <- function(filename) {
     library(mzR)
     splitname <- strsplit(filename, "\\.")[[1]]
