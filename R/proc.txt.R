@@ -19,32 +19,39 @@
 #'
 #' @keywords models
 proc.txt <- function(filename, min.pres = 0.5, min.run = 12, tol = NA, find.tol.maxd = 1e-4, baseline.correct.noise.percentile = 0.25, baseline.correct = 0) {
+    # 1. Prepare plotting space and cache file name
     par(mfrow = c(2, 2))
     this.name <- paste(strsplit(tolower(filename), ".txt")[[1]], "_", tol, "_", find.tol.maxd, ".rawprof", sep = "")
     all.files <- dir()
     is.there <- all.files[which(all.files == this.name)]
 
+    # 2. Load cached profile if it exists
     if (length(is.there) > 0) {
         load(this.name)
         plot(c(-1, 1), c(-1, 1), type = "n", xlab = "", ylab = "", main = "tolerance level loaded", axes = FALSE)
         text(x = 0, y = 0, tol, cex = 1.2)
     } else {
+        # 3. Read text-based LC/MS data and sort
         ex.nc <- read.table(filename, header = TRUE, sep = "\t")
         ex.nc <- as.matrix(ex.nc)
         ex.nc <- ex.nc[ex.nc[, 3] != 0, ]
         ex.nc <- ex.nc[order(ex.nc[, 1], ex.nc[, 2]), ]
 
+        # 4. Convert columns into list structure for adaptive binning
         this <- new("list")
         this$masses <- ex.nc[, 2]
         this$intensi <- ex.nc[, 3]
         this$labels <- ex.nc[, 1]
         this$times <- unique(ex.nc[, 1])
 
+        # 5. Build EICs and save raw profile
         raw.prof <- adaptive.bin(this, min.run = min.run, min.pres = min.pres, tol = tol, baseline.correct = baseline.correct)
         save(raw.prof, file = this.name)
     }
 
+    # 6. Combine profile elements into matrix form
     newprof <- cbind(raw.prof$masses, raw.prof$labels, raw.prof$intensi, raw.prof$grps)
+    # 7. Summarize peak heights for noise and signal groups
     h.1 <- log10(raw.prof$height.rec[raw.prof$height.rec[, 2] <= max(2, raw.prof$min.count.run * min.pres / 2), 3])
     h.2 <- log10(raw.prof$height.rec[raw.prof$height.rec[, 2] >= raw.prof$min.count.run * min.pres, 3])
     if (length(h.1) > 50) {
@@ -54,6 +61,7 @@ proc.txt <- function(filename, min.pres = 0.5, min.run = 12, tol = NA, find.tol.
         if (length(h.1) > 0) abline(v = h.1)
     }
 
+    # 8. Determine baseline cutoff if not provided
     if (is.na(baseline.correct)) {
         baseline.correct <- 10^quantile(h.1, baseline.correct.noise.percentile)
         message(c("maximal height cut is automatically set at the", baseline.correct.noise.percentile, "percentile of noise group heights: ", baseline.correct))
@@ -62,6 +70,7 @@ proc.txt <- function(filename, min.pres = 0.5, min.run = 12, tol = NA, find.tol.
     }
     abline(v = log10(baseline.correct), col = "red")
 
+    # 9. Apply height and continuity filters
     if (is.na(baseline.correct)) baseline.correct <- 0
     run.sel <- raw.prof$height.rec[which(raw.prof$height.rec[, 2] >= raw.prof$min.count.run * min.pres & raw.prof$height.rec[, 3] > baseline.correct), 1]
     newprof <- newprof[newprof[, 4] %in% run.sel, ]
@@ -72,5 +81,6 @@ proc.txt <- function(filename, min.pres = 0.5, min.run = 12, tol = NA, find.tol.
     hist(time.range.rec, xlab = "Range of retention time in the same group", ylab = "Density", freq = FALSE, nclass = 100, main = "Group retention time range distribution")
     hist(mz.pres.rec, xlab = "% signal present in the same group", ylab = "Density", freq = FALSE, nclass = 20, main = "Group % present signal distribution")
 
+    # 10. Return matrix of filtered EICs
     return(new.prof$new.rec)
 }

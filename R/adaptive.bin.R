@@ -28,17 +28,21 @@
 #'
 #' @keywords models
 adaptive.bin <- function(x, min.run, min.pres, tol, baseline.correct, weighted = FALSE) {
+    # 1. Extract input vectors for mass, time, and intensity
     masses <- x$masses
     labels <- x$labels
     intensi <- x$intensi
     times <- x$times
 
+    # 2. Drop original list to free memory
     rm(x)
 
+    # 3. Prepare base curve of unique times for later reference
     base.curve <- unique(times)
     base.curve <- base.curve[order(base.curve)]
     base.curve <- cbind(base.curve, base.curve * 0)
 
+    # 4. Order observations by mass
     curr.order <- order(masses)
     intensi <- intensi[curr.order]
     labels <- labels[curr.order]
@@ -46,10 +50,9 @@ adaptive.bin <- function(x, min.run, min.pres, tol, baseline.correct, weighted =
 
     rm(curr.order)
 
+    # 5. Report tolerance and set up mass density estimate
     cat(c("m/z tolerance is: ", tol, "\n"))
-
     l <- length(masses)
-
     curr.bw <- 0.5 * tol * max(masses)
     if (weighted) {
         all.mass.den <- density(masses, weights = intensi / sum(intensi), bw = curr.bw, n = 2^min(15, floor(log2(l)) - 2))
@@ -60,8 +63,8 @@ adaptive.bin <- function(x, min.run, min.pres, tol, baseline.correct, weighted =
     all.mass.vlys <- all.mass.den$x[all.mass.turns$vlys]
     breaks <- c(0, unique(round(approx(masses, 1:l, xout = all.mass.vlys, rule = 2, ties = 'ordered')$y))[-1])
 
+    # 6. Initialize bookkeeping structures
     grps <- masses * 0 # this is which peak group the signal belongs to, not time group
-
     min.lab <- min(labels)
     max.lab <- max(labels)
     times <- unique(labels)
@@ -76,9 +79,11 @@ adaptive.bin <- function(x, min.run, min.pres, tol, baseline.correct, weighted =
     prof.pointer <- 1
     height.pointer <- 1
 
+    # 7. Iterate over mass-density valleys to isolate EIC candidates
     for (i in 1:(length(breaks) - 1)) {
         this.labels <- labels[(breaks[i] + 1):breaks[i + 1]]
         if (length(unique(this.labels)) >= min.count.run * min.pres) {
+            # 8. Extract masses and intensities for current slice
             this.masses <- masses[(breaks[i] + 1):breaks[i + 1]]
             this.intensi <- intensi[(breaks[i] + 1):breaks[i + 1]]
 
@@ -87,6 +92,7 @@ adaptive.bin <- function(x, min.run, min.pres, tol, baseline.correct, weighted =
             this.intensi <- this.intensi[curr.order]
             this.labels <- this.labels[curr.order]
 
+            # 9. Find peaks within this mass slice
             this.bw = 0.5 * tol * median(this.masses)
             if (weighted) {
                 mass.den <- density(this.masses, weights = this.intensi / sum(this.intensi), bw = this.bw)
@@ -98,7 +104,7 @@ adaptive.bin <- function(x, min.run, min.pres, tol, baseline.correct, weighted =
             mass.pks <- mass.den$x[mass.turns$pks]
             mass.vlys <- c(-Inf, mass.den$x[mass.turns$vlys], Inf)
 
-
+            # 10. Process each detected mass peak
             for (j in 1:length(mass.pks)) {
                 mass.lower <- max(mass.vlys[mass.vlys < mass.pks[j]])
                 mass.upper <- min(mass.vlys[mass.vlys > mass.pks[j]])
@@ -111,6 +117,7 @@ adaptive.bin <- function(x, min.run, min.pres, tol, baseline.correct, weighted =
                     that.masses <- this.masses[mass.sel]
                     that.intensi <- this.intensi[mass.sel]
 
+                    # 11. Merge contiguous time sequences
                     that.merged <- merge.seq.3(that.labels, that.masses, that.intensi)
                     if (nrow(that.merged) == 1) {
                         new.merged <- that.merged
@@ -123,6 +130,7 @@ adaptive.bin <- function(x, min.run, min.pres, tol, baseline.correct, weighted =
                     that.intensi <- new.merged[, 3]
                     that.range <- diff(range(that.labels))
 
+                    # 12. Remove long baseline ridges when necessary
                     if (that.range > 0.5 * time.range & length(that.labels) > that.range * min.pres & length(that.labels) / (diff(range(that.labels)) / aver.time.range) > min.pres) {
                         that.intensi <- rm.ridge(that.labels, that.intensi, bw = max(10 * min.run, that.range / 2))
 
@@ -131,6 +139,7 @@ adaptive.bin <- function(x, min.run, min.pres, tol, baseline.correct, weighted =
                         that.masses <- that.masses[that.sel]
                         that.intensi <- that.intensi[that.sel]
                     }
+                    # 13. Record cleaned profile segment
                     that.n <- length(that.masses)
                     newprof[prof.pointer:(prof.pointer + that.n - 1), ] <- cbind(that.masses, that.labels, that.intensi, rep(curr.label, that.n))
                     prof.pointer <- prof.pointer + that.n
@@ -140,6 +149,7 @@ adaptive.bin <- function(x, min.run, min.pres, tol, baseline.correct, weighted =
                 }
             }
         } else {
+            # 14. Randomly keep small segments to maintain background estimate
             if (runif(1) < 0.05) {
                 this.masses <- masses[(breaks[i] + 1):breaks[i + 1]]
                 this.intensi <- intensi[(breaks[i] + 1):breaks[i + 1]]
@@ -147,7 +157,6 @@ adaptive.bin <- function(x, min.run, min.pres, tol, baseline.correct, weighted =
                 this.masses <- this.masses[curr.order]
                 this.intensi <- this.intensi[curr.order]
                 this.labels <- this.labels[curr.order]
-
 
                 that.merged <- merge.seq.3(this.labels, this.masses, this.intensi)
                 that.n <- nrow(that.merged)
@@ -161,11 +170,12 @@ adaptive.bin <- function(x, min.run, min.pres, tol, baseline.correct, weighted =
         }
     }
 
+    # 15. Trim unused rows and order by m/z and time
     newprof <- newprof[1:(prof.pointer - 1), ]
     height.rec <- height.rec[1:(height.pointer - 1), ]
-
     newprof <- newprof[order(newprof[, 1], newprof[, 2]), ]
 
+    # 16. Assemble output list
     raw.prof <- new("list")
     raw.prof$height.rec <- height.rec
     raw.prof$masses <- newprof[, 1]
@@ -176,5 +186,6 @@ adaptive.bin <- function(x, min.run, min.pres, tol, baseline.correct, weighted =
     raw.prof$tol <- tol
     raw.prof$min.count.run <- min.count.run
 
+    # 17. Return profile summary
     return(raw.prof)
 }

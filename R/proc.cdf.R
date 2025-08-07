@@ -19,16 +19,20 @@
 #'
 #' @keywords models
 proc.cdf <- function(filename, min.pres = 0.5, min.run = 12, tol = 1e-5, baseline.correct = 0, baseline.correct.noise.percentile = 0, do.plot = TRUE, intensity.weighted = FALSE) {
+    # 1. Set up plotting window if requested
     if (do.plot) par(mfrow = c(2, 2))
+    # 2. Construct cache file name based on parameters
     this.name <- paste(strsplit(tolower(filename), "\\.")[[1]][1], "_", min.run, "_", min.pres, "_", tol, ".rawprof", sep = "")
     all.files <- dir()
     is.there <- all.files[which(all.files == this.name)]
 
+    # 3. Load cached profile if available
     if (length(is.there) > 0) {
         load(this.name)
         if (do.plot) plot(c(-1, 1), c(-1, 1), type = "n", xlab = "", ylab = "", main = "tolerance level loaded", axes = FALSE)
         if (do.plot) text(x = 0, y = 0, tol, cex = 1.2)
     } else {
+        # 4. Read spectrum and drop rows with missing values
         this <- load.lcms(filename)
         na.sel <- c(which(is.na(this$masses)), which(is.na(this$labels)), which(is.na(this$intensi)))
         if (length(na.sel) > 0) {
@@ -39,14 +43,18 @@ proc.cdf <- function(filename, min.pres = 0.5, min.run = 12, tol = 1e-5, baselin
         }
         message("WARNING: there are NA values in the m/z or intensity. Check the file:")
         message(filename)
+        # 5. Build EICs through adaptive binning
         raw.prof <- adaptive.bin(this, min.run = min.run, min.pres = min.pres, tol = tol, baseline.correct = baseline.correct, weighted = intensity.weighted)
         save(raw.prof, file = this.name)
     }
 
+    # 6. Combine profile data into matrix form
     newprof <- cbind(raw.prof$masses, raw.prof$labels, raw.prof$intensi, raw.prof$grps)
+    # 7. Summarize peak heights for noise and signal groups
     h.1 <- log10(raw.prof$height.rec[raw.prof$height.rec[, 2] <= max(2, raw.prof$min.count.run * min.pres / 2), 3])
     h.2 <- log10(raw.prof$height.rec[raw.prof$height.rec[, 2] >= raw.prof$min.count.run * min.pres, 3])
     if (do.plot) {
+        # 8. Display distribution of group heights
         if (length(h.1) > 50) {
             plot(density(h.1), xlab = "maximum height of group (log scale)", xlim = range(c(h.1, h.2)), main = "Black - noise groups \n Blue - selected groups")
         } else {
@@ -55,6 +63,7 @@ proc.cdf <- function(filename, min.pres = 0.5, min.run = 12, tol = 1e-5, baselin
         }
     }
 
+    # 9. Determine baseline cutoff if not given
     if (is.na(baseline.correct)) {
         baseline.correct <- 10^quantile(h.1, baseline.correct.noise.percentile)
         message(c("maximal height cut is automatically set at the", baseline.correct.noise.percentile, "percentile of noise group heights: ", baseline.correct))
@@ -63,9 +72,11 @@ proc.cdf <- function(filename, min.pres = 0.5, min.run = 12, tol = 1e-5, baselin
     }
     if (do.plot) abline(v = log10(baseline.correct), col = "red")
 
+    # 10. Filter groups failing height or presence criteria
     if (is.na(baseline.correct)) baseline.correct <- 0
     run.sel <- raw.prof$height.rec[which(raw.prof$height.rec[, 2] >= raw.prof$min.count.run * min.pres & raw.prof$height.rec[, 3] > baseline.correct), 1]
     newprof <- newprof[newprof[, 4] %in% run.sel, ]
+    # 11. Apply continuity index for final filtering
     new.prof <- cont.index(newprof, min.pres = min.pres, min.run = min.run)
     if (do.plot) lines(density(log10(new.prof$height.rec)), col = "blue")
     time.range.rec <- new.prof$time.range.rec
@@ -73,5 +84,6 @@ proc.cdf <- function(filename, min.pres = 0.5, min.run = 12, tol = 1e-5, baselin
     if (do.plot) hist(time.range.rec, xlab = "Range of retention time in the same group", ylab = "Density", freq = FALSE, nclass = 100, main = "Group retention time range distribution")
     if (do.plot) hist(mz.pres.rec, xlab = "% signal present in the same group", ylab = "Density", freq = FALSE, nclass = 20, main = "Group % present signal distribution")
 
+    # 12. Return matrix of filtered EICs
     return(new.prof$new.rec)
 }

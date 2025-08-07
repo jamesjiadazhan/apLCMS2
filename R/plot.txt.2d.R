@@ -18,20 +18,27 @@
 #'
 #' @keywords models
 plot.txt.2d <- function(rawname, f, mzlim, timelim, lwd = 1) {
-    ########### read the raw table
-    ex.nc <- read.table(rawname, header = T, sep = "\t")
+    # 1. Read tab-delimited raw LC/MS data
+    ex.nc <- read.table(rawname, header = TRUE, sep = "\t")
+    # 2. Convert to matrix for fast indexing
     ex.nc <- as.matrix(ex.nc)
+    # 3. Remove zero-intensity points
     ex.nc <- ex.nc[ex.nc[, 3] != 0, ]
 
-    #####################
-
+    # 4. Filter entries to requested time and m/z ranges
     ex.nc <- ex.nc[ex.nc[, 1] >= timelim[1] & ex.nc[, 1] <= timelim[2] & ex.nc[, 2] >= mzlim[1] & ex.nc[, 2] <= mzlim[2], ]
+    # 5. Plot remaining raw data points
     plot(ex.nc[, 1:2], cex = .1)
 
+    # 6. Restrict feature list to m/z window
     f <- f[f[, 1] >= mzlim[1] & f[, 1] <= mzlim[2], ]
+    # 7. Add retention-time spans for each detected feature
     for (i in 1:nrow(f)) {
+        # 8. Current feature's m/z
         this.mz <- f[i, 1]
+        # 9. Compute start and end times using center and spread
         this.time <- c(f[i, 2] - f[i, 3], f[i, 2] + f[i, 3])
+        # 10. Draw horizontal line representing feature
         lines(this.time, rep(this.mz, 2), col = "red", lwd = lwd)
     }
 }
