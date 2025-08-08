@@ -33,7 +33,8 @@
 #'
 #' @author Tianwei Yu <tyu8@sph.emory.edu>
 #'
-recover.weaker <- function(filename, loc, aligned.ftrs, pk.times, align.mz.tol, align.chr.tol, this.f1, this.f2, mz.range = NA, chr.range = NA, use.observed.range = TRUE, orig.tol = 1e-5, min.bw = NA, max.bw = NA, bandwidth = .5, recover.min.count = 3, intensity.weighted = FALSE) {
+ recover.weaker <- function(filename, loc, aligned.ftrs, pk.times, align.mz.tol, align.chr.tol, this.f1, this.f2, mz.range = NA, chr.range = NA, use.observed.range = TRUE, orig.tol = 1e-5, min.bw = NA, max.bw = NA, bandwidth = .5, recover.min.count = 3, intensity.weighted = FALSE) {
+    # 1. Helper: remove exact duplicate rows (same mz, time, area) to keep table unique
     duplicate.row.remove <- function(new.table) {
         new.table <- new.table[order(new.table[, 1], new.table[, 2], new.table[, 5]), ]
         n <- 1
@@ -54,11 +55,13 @@ recover.weaker <- function(filename, loc, aligned.ftrs, pk.times, align.mz.tol, 
         new.table
     }
 
+    # 2. Load dependencies and determine default search windows if not provided
     library(splines)
     library(mzR)
     if (is.na(mz.range)) mz.range <- 1.5 * align.mz.tol
     if (is.na(chr.range)) chr.range <- align.chr.tol / 2
 
+    # 3. Load raw LC/MS data and remove any NA entries to avoid downstream errors
     this.raw <- load.lcms(filename)
     na.sel <- c(which(is.na(this.raw$masses)), which(is.na(this.raw$labels)), which(is.na(this.raw$intensi)))
 
@@ -75,7 +78,7 @@ recover.weaker <- function(filename, loc, aligned.ftrs, pk.times, align.mz.tol, 
     times <- this.raw$times
     rm(this.raw)
 
-
+    # 4. Sort by m/z and compute mass slice breakpoints for quick local searches
     masses <- c(masses, -100000)
     mass.breaks <- which(masses[1:(length(masses) - 1)] > masses[2:length(masses)])
     mass.breaks <- c(0, mass.breaks)
@@ -86,11 +89,12 @@ recover.weaker <- function(filename, loc, aligned.ftrs, pk.times, align.mz.tol, 
     labels <- labels[curr.order]
     masses <- masses[curr.order]
 
-
+    # 5. Choose smoothing bandwidth bounds from full time span of profile
     if (is.na(min.bw)) min.bw <- diff(range(times, na.rm = TRUE)) / 60
     if (is.na(max.bw)) max.bw <- diff(range(times, na.rm = TRUE)) / 15
     if (min.bw >= max.bw) min.bw <- max.bw / 4
 
+    # 6. Build base time grid and per-interval widths for integration/interpolation
     times <- times[order(times)]
     base.curve <- unique(times)
     base.curve <- base.curve[order(base.curve)]
@@ -103,6 +107,7 @@ recover.weaker <- function(filename, loc, aligned.ftrs, pk.times, align.mz.tol, 
     all.times <- (all.times[1:(length(all.times) - 1)] + all.times[2:length(all.times)]) / 2
     all.times <- all.times[2:length(all.times)] - all.times[1:(length(all.times) - 1)]
 
+    # 7. Pull the intensity/time columns for the target file and compute custom tolerances per feature
     this.ftrs <- aligned.ftrs[, (loc + 4)]
     this.times <- pk.times[, (loc + 4)]
     custom.mz.tol <- mz.range * aligned.ftrs[, 1]
@@ -110,11 +115,13 @@ recover.weaker <- function(filename, loc, aligned.ftrs, pk.times, align.mz.tol, 
 
     custom.chr.tol <- rep(chr.range, nrow(aligned.ftrs))
 
+    # 8. Optionally shrink time window to observed cross-sample spread (requires >=5 non-missing RTs)
     if (use.observed.range) {
         observed.chr.range <- (apply(pk.times[, 5:ncol(pk.times)], 1, max) - apply(pk.times[, 5:ncol(pk.times)], 1, min)) / 2
         num.present <- apply(!is.na(pk.times[, 5:ncol(pk.times)]), 1, sum)
         custom.chr.tol[which(num.present >= 5 & custom.chr.tol > observed.chr.range)] <- observed.chr.range[which(num.present >= 5 & custom.chr.tol > observed.chr.range)]
     }
+    # 9. Build mapping between original and adjusted times using unique one-to-one time pairs
     orig.time <- round(this.f1[, 2], 5)
     adjusted.time <- round(this.f2[, 2], 5)
     message("first check")
@@ -138,6 +145,7 @@ recover.weaker <- function(filename, loc, aligned.ftrs, pk.times, align.mz.tol, 
         target.time[sel.non.na] <- predict(sp, aligned.ftrs[sel.non.na, 2])$y
     }
 
+    # 10. Build global mass density to compute break indices for local slices efficiently
     l <- length(masses)
     curr.bw <- 0.5 * orig.tol * max(masses)
     all.mass.den <- density(masses, weights = intensi / sum(intensi), bw = curr.bw, n = 2^min(15, floor(log2(l)) - 2))
@@ -146,6 +154,7 @@ recover.weaker <- function(filename, loc, aligned.ftrs, pk.times, align.mz.tol, 
     breaks <- c(0, unique(round(approx(masses, 1:l, xout = all.mass.vlys, rule = 2, ties = 'ordered')$y))[-1])
     this.mz <- rep(NA, length(this.ftrs))
 
+    # 11. For each feature missing in this file, search in the local m/z slice and recover its best matching RT/area
     for (i in 1:length(this.ftrs)) {
         if (!is.na(this.ftrs[i]) & this.ftrs[i] == 0 & aligned.ftrs[i, 1] < masses[breaks[length(breaks)]]) {
             if (aligned.ftrs[i, 1] <= masses[breaks[2]]) {
@@ -161,6 +170,7 @@ recover.weaker <- function(filename, loc, aligned.ftrs, pk.times, align.mz.tol, 
                 this.labels <- labels[this.sel]
                 this.intensi <- intensi[this.sel]
 
+                # 12. Within slice, locate sub-peaks around target m/z by local mass density
                 this.bw = 0.5 * orig.tol * aligned.ftrs[i, 1]
                 if (intensity.weighted) {
                     mass.den <- density(this.masses, weights = this.intensi / sum(this.intensi), bw = this.bw)
@@ -181,6 +191,7 @@ recover.weaker <- function(filename, loc, aligned.ftrs, pk.times, align.mz.tol, 
 
                         that.sel <- which(this.masses > mass.lower & this.masses <= mass.upper)
                         if (length(that.sel) > recover.min.count) {
+                            # 13. Collapse duplicate times within slice, then evaluate area/RT by interpolation or smoothing
                             that.labels <- this.labels[that.sel]
                             that.masses <- this.masses[that.sel]
                             that.intensi <- this.intensi[that.sel]
@@ -280,6 +291,7 @@ recover.weaker <- function(filename, loc, aligned.ftrs, pk.times, align.mz.tol, 
                         }
                     }
 
+                    # 14. Choose the best candidate by proximity to target RT and m/z (or nearest m/z if RT unknown)
                     if (!is.na(target.time[i])) {
                         this.sel <- which(abs(this.rec[, 2] - target.time[i]) < custom.chr.tol[i])
                     } else {
@@ -298,6 +310,7 @@ recover.weaker <- function(filename, loc, aligned.ftrs, pk.times, align.mz.tol, 
                                 this.sel <- which(this.d == min(this.d))[1]
                             }
                         }
+                        # 15. Record recovered entries into per-file feature table placeholders
                         this.pos.diff <- abs(this.f1[, 2] - this.rec[this.sel, 2])
                         this.pos.diff <- which(this.pos.diff == min(this.pos.diff))[1]
                         this.f1 <- rbind(this.f1, c(this.rec[this.sel, 1], this.rec[this.sel, 2], NA, NA, this.rec[this.sel, 3]))
@@ -311,6 +324,7 @@ recover.weaker <- function(filename, loc, aligned.ftrs, pk.times, align.mz.tol, 
             }
         }
     }
+    # 16. Clean up and return recovered feature list for this file
     message("third check")
     print(length(which(is.na(this.f1[, 2]))))
     print(length(which(is.na(this.f2[, 2]))))

@@ -36,12 +36,14 @@
 #'
 #' @keywords models
 eic.pred <- function(eic.rec, known.mz, mass.matched = NA, to.use = 10, do.plot = FALSE, match.tol.ppm = 5, do.grp.reduce = TRUE, remove.bottom = 5, max.fpr = 0.3, min.tpr = 0.8) {
+    # 1. Load required ML libraries for feature ranking, model fitting, and ROC utilities
     library(randomForest)
     library(e1071)
     library(ROCS)
     library(gbm)
     library(ROCR)
 
+    # 2. Optionally reduce groups of correlated/duplicated features by keeping top-AUC representative per group
     if (do.grp.reduce) {
         q <- eic.qual(eic.rec, known.mz, match.tol.ppm = match.tol.ppm)
         grp.names <- substr(rownames(q), 1, 14)
@@ -55,19 +57,23 @@ eic.pred <- function(eic.rec, known.mz, mass.matched = NA, to.use = 10, do.plot 
         eic.rec <- eic.rec[, c(1, 2, which(sel == 1) + 2)]
     }
 
+    # 3. Optionally remove the weakest predictors by single-feature AUC to simplify modeling
     if (remove.bottom > 0) {
         q <- eic.qual(eic.rec, known.mz, match.tol.ppm = match.tol.ppm)
         eic.rec <- eic.rec[, c(1, 2, which(rank(q[, 4]) > remove.bottom) + 2)]
     }
 
+    # 4. Build match indicator (1/0) against known m/z within ppm tolerance if not provided
     if (is.na(mass.matched[1])) {
         y <- mass.match(x = eic.rec[, 2], known.mz = known.mz, match.tol.ppm = match.tol.ppm)
     } else {
         y <- mass.matched
     }
 
+    # 5. Extract predictors (exclude m/z and RT columns)
     X <- eic.rec[, 3:ncol(eic.rec)]
 
+    # 6. Balance classes by subsampling unmatched (negatives) to match the number of matched (positives)
     sel.1 <- which(y == 1)
     sel.0 <- which(y == 0)
     sel.0 <- sample(sel.0, length(sel.1), replace = FALSE)
@@ -75,6 +81,7 @@ eic.pred <- function(eic.rec, known.mz, mass.matched = NA, to.use = 10, do.plot 
     X.1 <- X[c(sel.1, sel.0), ]
     y.1 <- y[c(sel.1, sel.0)]
 
+    # 7. Create a simple hold-out split (1/3 test) for model selection and performance comparison
     sel.2 <- sample(length(y.1), round(length(y.1) / 3), replace = FALSE)
     X.2 <- X.1[sel.2, ]
     y.2 <- y.1[sel.2]
@@ -88,6 +95,7 @@ eic.pred <- function(eic.rec, known.mz, mass.matched = NA, to.use = 10, do.plot 
 
     d <- new("list")
 
+    # 8. Rank features by importance using AdaBoost and RandomForest
     l <- gbm(y.1 ~ ., data = dat.1, distribution = "adaboost", n.trees = 500)
     d[[1]] <- summary(l, plotit = F)
     b <- randomForest(X.1, as.factor(y.1))
@@ -96,6 +104,7 @@ eic.pred <- function(eic.rec, known.mz, mass.matched = NA, to.use = 10, do.plot 
     d[[2]] <- d[[2]][order(-d[[2]][, 2]), ]
     all.d <- d
 
+    # 9. Evaluate multiple models (AdaBoost/Logistic/SVM/RF) across different top-k feature counts
     all.to.use <- c(ncol(X.1), 1:to.use)
     X.1.0 <- X.1
     y.1.0 <- y.1
@@ -111,6 +120,7 @@ eic.pred <- function(eic.rec, known.mz, mass.matched = NA, to.use = 10, do.plot 
         rownames(rrr) <- c("all", 1:to.use)
 
         for (k in 1:length(all.to.use)) {
+            # 10. Select top-k features by current ranking and fit each model; compute fcAUC on train/test
             to.use <- all.to.use[k]
 
             sel.vars <- rownames(d)[1:to.use]
@@ -186,6 +196,7 @@ eic.pred <- function(eic.rec, known.mz, mass.matched = NA, to.use = 10, do.plot 
         all.rec[[n]] <- rrr
     }
 
+    # 11. Select the best learner and number of predictors by hold-out performance
     new.rec <- data.frame(all.rec[[1]][, c(2, 4, 6, 8)], all.rec[[2]][, c(2, 4, 6, 8)])
     method.sel <- apply(new.rec[-1, ], 2, max)
     method.sel <- which(method.sel == max(method.sel))[1]
@@ -203,6 +214,7 @@ eic.pred <- function(eic.rec, known.mz, mass.matched = NA, to.use = 10, do.plot 
     message("using these variables: ")
     print(sel.vars)
 
+    # 12. Refit on balanced training set with selected variables and score all EICs with the chosen model
     sel.1 <- which(y == 1)
     sel.0 <- which(y == 0)
     sel.0 <- sample(sel.0, length(sel.1), replace = FALSE)
@@ -241,6 +253,7 @@ eic.pred <- function(eic.rec, known.mz, mass.matched = NA, to.use = 10, do.plot 
         z2[which(!(1:nrow(X) %in% c(sel.1, sel.0)))] <- z.new
     }
 
+    # 13. Build TPR/FPR at each unique score threshold and assign to each EIC
     r2 <- rocs.x(z2[y == 0], z2[y == 1], FDR.cut = 1, n.perm = 1, do.plot = FALSE)
     zz <- unique(z2)
     zz <- zz[order(zz)]
@@ -253,6 +266,7 @@ eic.pred <- function(eic.rec, known.mz, mass.matched = NA, to.use = 10, do.plot 
         fps[this.sel] <- r2$fp[i + 1]
     }
 
+    # 14. Final selection: retain matched EICs meeting min.tpr and unmatched meeting max.fpr
     chosen <- y * 0
     chosen[y == 1 & tps <= min.tpr] <- 1
     chosen[y == 0 & fps <= max.fpr] <- 1
@@ -266,5 +280,6 @@ eic.pred <- function(eic.rec, known.mz, mass.matched = NA, to.use = 10, do.plot 
         boxplot(split(z2, y), main = "split by hmdb match")
         boxplot(split(z2, chosen), main = "split by selection")
     }
+    # 15. Return scores, selection mask, model info, and diagnostics
     return(list(chosen = chosen, fpr = fps, tpr = tps, matched = y, pred.performance = all.rec, feature.rank.method = c("adaboost", "RF")[block.sel], model = c("adaboost", "logistic reg", "SVM", "RF", "adaboost", "logistic reg", "SVM", "RF")[method.sel], feature.importance = all.d, used.features = sel.vars, final.auc = r2$fcauc))
 }

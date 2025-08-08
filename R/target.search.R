@@ -34,14 +34,24 @@
 #' @seealso cdf.to.ftrs, proc.cdf, prof.to.feature, adjust.time, feature.align, recover.weaker
 #'
 #' @keywords models
+#' 
+#' @references Bioinformatics. 30(20): 2941-2948. Bioinformatics. 25(15):1930-36. BMC Bioinformatics. 11:559.
+#'
+#' @author Tianwei Yu <tyu8@emory.edu>
+#'
+#' @keywords models
 target.search <- function(folder, file.pattern=".cdf", known.table=NA, n.nodes=4, min.exp=2, min.bw=NA, max.bw=NA, subs=NULL, align.mz.tol=2e-5, align.chr.tol=150, max.align.mz.diff=0.01, recover.mz.range=NA, recover.chr.range=NA, use.observed.range=TRUE, match.tol.ppm=5, new.feature.min.count=2, recover.min.count=3) {
+    # 1. Internal worker: process one file to recover target features near provided m/z/time seeds
     target.onefile<-function(filename, loc, aligned.ftrs, pk.times, align.mz.tol, align.chr.tol, mz.range=NA, chr.range=NA, use.observed.range=TRUE, orig.tol=1e-5,min.bw=NA,max.bw=NA,bandwidth=.5, recover.min.count=3) {
+        # 2. Internal de-duplication: remove exact duplicate rows (m/z, time, area)
         duplicate.row.remove<-function(new.table) {
+            # 3. Ensure deterministic ordering before duplicate scan
             new.table<-new.table[order(new.table[,1], new.table[,2], new.table[,5]),]
             n<-1
             m<-2
             to.remove<-rep(0, nrow(new.table))
 
+            # 4. Walk through rows and mark duplicates with identical m/z, time, and area
             while(m <= nrow(new.table)) {
                 if(abs(new.table[m,1]-new.table[n,1])<1e-10 & abs(new.table[m,2]-new.table[n,2])<1e-10 & abs(new.table[m,5]-new.table[n,5])<1e-10) {
                     to.remove[m]<-1
@@ -52,15 +62,19 @@ target.search <- function(folder, file.pattern=".cdf", known.table=NA, n.nodes=4
                 }
             }
 
+            # 5. Drop rows flagged as duplicates
             if(sum(to.remove)>0) new.table<-new.table[-which(to.remove==1),]
             new.table
         }
 
+        # 6. Load required packages locally inside worker
         library(splines)
         library(mzR)
+        # 7. Derive search ranges when not provided by user: relative in m/z, absolute in time
         if(is.na(mz.range)) mz.range<-1.5*align.mz.tol
         if(is.na(chr.range)) chr.range<-align.chr.tol/2
 
+        # 8. Load LC/MS profile; extract core vectors; free source object for memory
         this.raw<-load.lcms(filename)
         masses<-this.raw$masses
         intensi<-this.raw$intensi
@@ -68,12 +82,13 @@ target.search <- function(folder, file.pattern=".cdf", known.table=NA, n.nodes=4
         times<-this.raw$times
         rm(this.raw)
 
+        # 9. Create uniformly spaced time grid support for later interpolation/integration
         times<-times[order(times)]
         base.curve<-unique(times)
         base.curve<-base.curve[order(base.curve)]
         base.curve<-cbind(base.curve, base.curve*0)
 
-
+        # 10. Prepare mass-sorted arrays and segment boundaries for efficient local searches
         masses<-c(masses, -100000)
         mass.breaks<-which(masses[1:(length(masses)-1)] > masses[2:length(masses)])
         mass.breaks<-c(0,mass.breaks)
@@ -84,12 +99,13 @@ target.search <- function(folder, file.pattern=".cdf", known.table=NA, n.nodes=4
         labels<-labels[curr.order]
         masses<-masses[curr.order]
 
-
+        # 11. Choose bandwidth limits for time smoothing relative to profile span
         if(is.na(min.bw)) min.bw<-diff(range(times, na.rm=TRUE))/60
         if(is.na(max.bw)) max.bw<-diff(range(times, na.rm=TRUE))/15
         if(min.bw >= max.bw) min.bw<-max.bw/4
 
-        base.curve<-times
+        # 12. Build trapezoid-like time weights for area integration on the full grid
+        base.curve<-times   
         aver.diff<-mean(diff(base.curve))
         base.curve<-cbind(base.curve, base.curve*0)
         all.times<-base.curve[,1]
@@ -98,50 +114,51 @@ target.search <- function(folder, file.pattern=".cdf", known.table=NA, n.nodes=4
         all.times<-(all.times[1:(length(all.times)-1)]+all.times[2:length(all.times)])/2
         all.times<-all.times[2:length(all.times)]-all.times[1:(length(all.times)-1)]
 
+        # 13. Extract per-file target presence and time seeds; compute per-feature custom tolerances
         this.ftrs<-aligned.ftrs[, (loc+4)]
         this.times<-pk.times[,(loc+4)]
         custom.mz.tol<-mz.range*aligned.ftrs[,1]
         observed.mz.range<-(aligned.ftrs[,4]-aligned.ftrs[,3])/2
-        #	if(use.observed.range) custom.mz.tol[which(custom.mz.tol < observed.mz.range)]<-observed.mz.range[which(custom.mz.tol < observed.mz.range)]
-
         custom.chr.tol<-rep(chr.range, nrow(aligned.ftrs))
 
-        if(use.observed.range)
-        {
+        # 14. Optionally shrink RT tolerance using observed cross-sample spread when enough observations exist
+        if(use.observed.range) {
             observed.chr.range<-(apply(pk.times[,5:ncol(pk.times)],1,max)-apply(pk.times[,5:ncol(pk.times)],1,min))/2
             num.present<-apply(!is.na(pk.times[,5:ncol(pk.times)]),1,sum)
             custom.chr.tol[which(num.present>=5 & custom.chr.tol > observed.chr.range)]<-observed.chr.range[which(num.present>=5 & custom.chr.tol > observed.chr.range)]
         }
 
+        # 15. Pre-compute weighted global mass density to obtain mass-slice boundaries
         l<-length(masses)
         curr.bw<-0.5*orig.tol*max(masses)
         all.mass.den<-density(masses, weights=intensi/sum(intensi), bw=curr.bw, n=2^min(15, floor(log2(l))-2))
         all.mass.turns<-find.turn.point(all.mass.den$y)
         all.mass.vlys<-all.mass.den$x[all.mass.turns$vlys]
         breaks<-c(0, unique(round(approx(masses,1:l,xout=all.mass.vlys,rule=2,ties='ordered')$y))[-1])
+        # 16. Initialize per-feature return containers
         this.mz<-rep(NA, length(this.ftrs))
         this.f1<-matrix(rep(NA,5),nrow=1)
         target.time<-aligned.ftrs[,2]
 
-        for(i in 1:length(this.ftrs))
-        {
-            if(this.ftrs[i] == 0 & aligned.ftrs[i,1] < masses[breaks[length(breaks)]])
-            {
-                if(aligned.ftrs[i,1] <= masses[breaks[2]])
-                {
+        # 17. Iterate over each target feature; if missing in this file, attempt local recovery near the expected m/z and RT
+        for(i in 1:length(this.ftrs)) {
+            if(this.ftrs[i] == 0 & aligned.ftrs[i,1] < masses[breaks[length(breaks)]]) {
+                # 18. Identify mass-slice indices enclosing the target m/z using custom m/z tolerance
+                if(aligned.ftrs[i,1] <= masses[breaks[2]]) {
                     this.found<-c(1,2)
                 }else{
                     this.found<-c(which(abs(masses[breaks]-aligned.ftrs[i,1]) < custom.mz.tol[i]), min(which(masses[breaks] > aligned.ftrs[i,1])), max(which(masses[breaks] < aligned.ftrs[i,1])))+1
                     this.found<-c(min(this.found), max(this.found))
                 }
 
-                if(length(this.found)>1)
-                {
+                # 19. Only proceed when a valid slice is identified
+                if(length(this.found)>1) {
                     this.sel<-(breaks[this.found[1]]+1):breaks[this.found[2]]
                     this.masses<-masses[this.sel]
                     this.labels<-labels[this.sel]
                     this.intensi<-intensi[this.sel]
 
+                    # 20. Estimate local mass density; select candidate mass peaks near target m/z
                     this.bw=0.5*orig.tol*aligned.ftrs[i,1]
                     mass.den<-density(this.masses, weights=this.intensi/sum(this.intensi), bw=this.bw)
                     mass.den$y[mass.den$y < min(this.intensi)/10]<-0
@@ -150,17 +167,16 @@ target.search <- function(folder, file.pattern=".cdf", known.table=NA, n.nodes=4
                     mass.vlys<-c(-Inf, mass.den$x[mass.turns$vlys], Inf)
                     mass.pks<-mass.pks[which(abs(mass.pks-aligned.ftrs[i,1]) < custom.mz.tol[i]/1.5)]
 
-                    if(length(mass.pks) > 0)
-                    {
+                    # 21. For each candidate mass peak, evaluate the time profile and area near target time
+                    if(length(mass.pks) > 0) {
                         this.rec<-matrix(c(Inf, Inf, Inf),nrow=1)
-                        for(k in 1:length(mass.pks))
-                        {
+                        for(k in 1:length(mass.pks)) {
                             mass.lower<-max(mass.vlys[mass.vlys < mass.pks[k]])
                             mass.upper<-min(mass.vlys[mass.vlys > mass.pks[k]])
 
                             that.sel<-which(this.masses > mass.lower & this.masses <= mass.upper)
-                            if(length(that.sel) > recover.min.count)
-                            {
+                            if(length(that.sel) > recover.min.count) {
+                                # 22. Build merged EIC for this mass window (collapse duplicate times; sum intensities)
                                 that.labels<-this.labels[that.sel]
                                 that.masses<-this.masses[that.sel]
                                 that.intensi<-this.intensi[that.sel]
@@ -171,21 +187,18 @@ target.search <- function(folder, file.pattern=".cdf", known.table=NA, n.nodes=4
 
                                 that.prof<-merge.seq.3(that.labels, that.masses, that.intensi)
 
+                                # 23. Use intensity-weighted mass; compute RT and area via interpolation or smoothing depending on length
                                 that.mass<-sum(that.prof[,1]*that.prof[,3])/sum(that.prof[,3])
                                 curr.rec<-c(that.mass, NA,NA)
-                                if(nrow(that.prof) < 10)
-                                {
-
-                                    if(!is.na(target.time[i]))
-                                    {
+                                if(nrow(that.prof) < 10) {
+                                    # 24. Short traces: restrict by RT target window if known; integrate by interpolation
+                                    if(!is.na(target.time[i])) {
                                         thee.sel<-which(abs(that.prof[,2]-target.time[i]) < custom.chr.tol[i]*2)
                                     }else{
                                         thee.sel<-1:nrow(that.prof)
                                     }
-                                    if(length(thee.sel)>recover.min.count)
-                                    {
-                                        if(length(thee.sel)>1)
-                                        {
+                                    if(length(thee.sel)>recover.min.count) {
+                                        if(length(thee.sel)>1) {
                                             that.inte<-interpol.area(that.prof[thee.sel,2], that.prof[thee.sel,3], base.curve[,1], all.times)
                                         }else{
                                             that.inte<-that.prof[thee.sel,3]*aver.diff
@@ -195,6 +208,7 @@ target.search <- function(folder, file.pattern=".cdf", known.table=NA, n.nodes=4
                                         this.rec<-rbind(this.rec, curr.rec)
                                     }
                                 }else{
+                                    # 25. Longer traces: smooth over time; find peaks and evaluate area/time per candidate
                                     this<-that.prof[,2:3]
                                     this<-this[order(this[,1]),]
                                     this.span<-range(this[,1])
@@ -209,15 +223,15 @@ target.search <- function(folder, file.pattern=".cdf", known.table=NA, n.nodes=4
                                     vlys<-this.smooth$x[turns$vlys]
                                     vlys<-c(-Inf, vlys, Inf)
 
+                                    # 26. Count raw points supporting each peak's RT window to avoid tiny peaks
                                     pks.n<-pks
-                                    for(m in 1:length(pks))
-                                    {
+                                    for(m in 1:length(pks)) {
                                         this.vlys<-c(max(vlys[which(vlys<pks[m])]), min(vlys[which(vlys>pks[m])]))
                                         pks.n[m]<-sum(this[,1]>= this.vlys[1] & this[,1] <= this.vlys[2])
                                     }
 
-                                    if(!is.na(target.time[i]))
-                                    {
+                                    # 27. If RT seed exists, choose peak nearest to it; otherwise keep peaks with enough support
+                                    if(!is.na(target.time[i])) {
                                         pks.d<-abs(pks-target.time[i])    # distance from the target peak location
                                         pks.d[pks.n==0]<-Inf
                                         pks<-pks[which(pks.d==min(pks.d))[1]]
@@ -229,10 +243,9 @@ target.search <- function(folder, file.pattern=".cdf", known.table=NA, n.nodes=4
                                     all.vlys<-vlys
                                     all.this<-this
 
-                                    if(length(all.pks)>0)
-                                    {
-                                        for(pks.i in 1:length(all.pks))
-                                        {
+                                    # 28. For each candidate RT peak, compute center (miu) and area (sc) robustly
+                                    if(length(all.pks)>0) {
+                                        for(pks.i in 1:length(all.pks)) {
                                             pks<-all.pks[pks.i]
                                             vlys<-c(max(all.vlys[which(all.vlys<pks)]), min(all.vlys[which(all.vlys>pks)]))
 
@@ -245,8 +258,7 @@ target.search <- function(folder, file.pattern=".cdf", known.table=NA, n.nodes=4
                                                 x<-this[,1]
                                                 y<-this[,2]
 
-                                                if(nrow(this)>=10)
-                                                {
+                                                if(nrow(this)>=10) {
                                                     miu<-sum(x*y)/sum(y)
                                                     sigma<-sqrt(sum(y*(x-miu)^2)/sum(y))
                                                     if(sigma==0)
@@ -272,8 +284,8 @@ target.search <- function(folder, file.pattern=".cdf", known.table=NA, n.nodes=4
                             }
                         }
 
-                        if(!is.na(target.time[i]))
-                        {
+                        # 29. Among candidate (m/z, RT, area) triples, select best by combined distance to target (or nearest m/z)
+                        if(!is.na(target.time[i])) {
                             this.sel<-which(abs(this.rec[,2]-target.time[i])<custom.chr.tol[i])
                         }else{
                             this.sel<-1:nrow(this.rec)
@@ -281,8 +293,7 @@ target.search <- function(folder, file.pattern=".cdf", known.table=NA, n.nodes=4
                         }
 
 
-                        if(length(this.sel)>0)
-                        {
+                        if(length(this.sel)>0) {
                             if(length(this.sel)>1)
                             {
                                 if(!is.na(target.time[i]))
@@ -294,6 +305,7 @@ target.search <- function(folder, file.pattern=".cdf", known.table=NA, n.nodes=4
                                     this.sel<-which(this.d==min(this.d))[1]
                                 }
                             }
+                            # 30. Record recovered intensity/time/mass and append to per-file feature table
                             this.f1<-rbind(this.f1,c(this.rec[this.sel,1],this.rec[this.sel,2],NA, NA, this.rec[this.sel,3]))
                             this.ftrs[i]<-this.rec[this.sel, 3]
                             this.times[i]<-this.rec[this.sel,2]
@@ -303,6 +315,7 @@ target.search <- function(folder, file.pattern=".cdf", known.table=NA, n.nodes=4
                 }
             }
         }
+        # 31. Finalize outputs for this file; remove placeholder row and duplicates
         this.f1<-this.f1[-1,]
         to.return<-new("list")
         to.return$this.mz<-this.mz
@@ -314,20 +327,21 @@ target.search <- function(folder, file.pattern=".cdf", known.table=NA, n.nodes=4
         return(to.return)
     }
 
+    # 32. Load packages; switch to target folder and enumerate files to process
     library(mzR)
     library(doParallel)
     setwd(folder)
 
     files<-dir(pattern=file.pattern, ignore.case = TRUE)
     files<-files[order(files)]
-    if(!is.null(subs))
-    {
+    if(!is.null(subs)) {
         if(!is.na(subs[1])) files<-files[subs]
     }
 
     ###############################################################################################
     message("Making target peak table")
 
+    # 33. Initialize aligned feature and time matrices using known.table seeds (mz/time/range)
     aligned.ftrs<-matrix(0, ncol=4+length(files), nrow=nrow(known.table))
     pk.times<-matrix(NA, ncol=4+length(files), nrow=nrow(known.table))
 
@@ -338,9 +352,11 @@ target.search <- function(folder, file.pattern=".cdf", known.table=NA, n.nodes=4
 
     ###############################################################################################
     message("**************************** recovering target signals *******************************")
+    # 34. Construct file-specific suffix for cache file names to avoid recomputation
     suf<-paste("recover", recover.mz.range, recover.chr.range, use.observed.range,match.tol.ppm,new.feature.min.count,recover.min.count,nrow(aligned.ftrs), sep="_")
 
 
+    # 35. Launch parallel workers and recover target signals in each raw file; cache outputs per file
     cl <- parallel::makeCluster(n.nodes)
     registerDoParallel(cl)
     clusterEvalQ(cl, library(apLCMS))
@@ -360,6 +376,7 @@ target.search <- function(folder, file.pattern=".cdf", known.table=NA, n.nodes=4
 
     ##############################################################################################
     message("loading feature tables after target search")
+    # 36. Load cached recovery results and populate aligned tables
     features.recov<-new("list")
 
     for(i in 1:length(files)) {
@@ -373,6 +390,7 @@ target.search <- function(folder, file.pattern=".cdf", known.table=NA, n.nodes=4
 
     ##############################################################################################
 
+    # 37. If enough target peaks are found per file, perform RT correction and alignment to remove redundancy
     if(min(unlist(lapply(features.recov, nrow))) >= 100) {
         message("****************************** time correction *************************")
         suf<-paste(suf,"round 2",sep="_")
@@ -386,6 +404,7 @@ target.search <- function(folder, file.pattern=".cdf", known.table=NA, n.nodes=4
             registerDoParallel(cl)
             clusterEvalQ(cl, library(apLCMS))
 
+            # 38. Adjust times across files using estimated (or provided) tolerances
             message(c("***** correcting time, CPU time (seconds) ",as.vector(system.time(f2.recov<-adjust.time(features.recov, mz.tol=align.mz.tol, chr.tol=align.chr.tol, find.tol.max.d=10*mz.tol, max.align.mz.diff=max.align.mz.diff)))[1]))
             save(f2.recov,file=this.name)
             parallel::stopCluster(cl)
@@ -401,6 +420,7 @@ target.search <- function(folder, file.pattern=".cdf", known.table=NA, n.nodes=4
         all.files<-dir()
         is.done<-all.files[which(all.files == this.name)]
         if(length(is.done)==0) {
+            # 39. Align features across files to consolidate duplicates based on m/z and RT
             message(c("***** aligning features, CPU time (seconds): ", as.vector(system.time(aligned.recov<-feature.align(f2.recov, min.exp=min.exp,mz.tol=align.mz.tol,chr.tol=align.chr.tol, find.tol.max.d=10*mz.tol, max.align.mz.diff=max.align.mz.diff)))[1]))
             save(aligned.recov,file=this.name)
         }else {
@@ -411,6 +431,7 @@ target.search <- function(folder, file.pattern=".cdf", known.table=NA, n.nodes=4
 
     #################################################################################################
 
+    # 40. Assemble and return final list object containing raw filled tables and optional reduced tables
     rec<-new("list")
     colnames(aligned.ftrs)<-colnames(pk.times)<-c("mz","time","mz.min","mz.max",files)
     rec$features<-features.recov

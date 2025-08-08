@@ -48,6 +48,7 @@
 #'
 #' @keywords models
 two.step.hybrid <- function(folder, info, min.within.batch.prop.detect = 0.1, min.within.batch.prop.report = 0.5, min.batch.prop = 0.5, batch.align.mz.tol = 1e-5, batch.align.chr.tol = 50, file.pattern = ".cdf", known.table = NA, n.nodes = 4, min.pres = 0.5, min.run = 12, mz.tol = 1e-5, baseline.correct.noise.percentile = 0.05, shape.model = "bi-Gaussian", baseline.correct = 0, peak.estim.method = "moment", min.bw = NA, max.bw = NA, sd.cut = c(0.1, 100), sigma.ratio.lim = c(0.05, 20), component.eliminate = 0.01, moment.power = 2, align.mz.tol = NA, align.chr.tol = NA, max.align.mz.diff = 0.01, pre.process = FALSE, recover.mz.range = NA, recover.chr.range = NA, use.observed.range = TRUE, match.tol.ppm = NA, new.feature.min.count = 2, recover.min.count = 3) {
+    # 1. Initialize: set working directory and parse batch info
     setwd(folder)
     info <- as.matrix(as.data.frame(info))
     batches <- unique(info[, 2])
@@ -55,6 +56,7 @@ two.step.hybrid <- function(folder, info, min.within.batch.prop.detect = 0.1, mi
     batchwise <- new("list")
     message("total number of batches: ", length(batches))
 
+    # 2. Process each batch independently using semi.sup() with per-batch subsets
     for (batch.i in 1:length(batches)) {
         message("working on batch number ", batch.i)
         batch <- batches[batch.i]
@@ -70,6 +72,7 @@ two.step.hybrid <- function(folder, info, min.within.batch.prop.detect = 0.1, mi
         batchwise[[batch.i]] <- b
     }
 
+    # 3. Create batch-level pseudo-feature lists using medians for intensity-only alignment across batches
     fake.features <- new("list")
     for (batch.i in 1:length(batches)) {
         this.fake <- batchwise[[batch.i]]$final.ftrs
@@ -79,9 +82,9 @@ two.step.hybrid <- function(folder, info, min.within.batch.prop.detect = 0.1, mi
         fake.features[[batch.i]] <- this.fake
     }
 
+    # 4. Adjust retention time between batches and align features across batches
     cl <- makeCluster(n.nodes)
     registerDoParallel(cl)
-    # clusterEvalQ(cl, source("~/Desktop/Dropbox/1-work/apLCMS_code/new_proc_cdf.r"))
     clusterEvalQ(cl, library(apLCMS))
 
     fake2 <- adjust.time(fake.features, mz.tol = batch.align.mz.tol, chr.tol = batch.align.chr.tol, find.tol.max.d = 10 * mz.tol, max.align.mz.diff = max.align.mz.diff)
@@ -91,6 +94,7 @@ two.step.hybrid <- function(folder, info, min.within.batch.prop.detect = 0.1, mi
 
     stopCluster(cl)
 
+    # 5. Recover weaker signals by mapping batchwise features to cross-batch alignment and searching within raw profiles
     message("Recovery across batches")
 
     cl <- makeCluster(n.nodes)
@@ -109,7 +113,6 @@ two.step.hybrid <- function(folder, info, min.within.batch.prop.detect = 0.1, mi
         this.pk.time <- this.aligned <- matrix(0, nrow = nrow(fake3$aligned.ftrs), ncol = ncol(this.fake) - 4)
 
         # adjusting the time (already within batch adjusted)
-
         for (j in 1:length(this.features)) {
             for (i in 1:nrow(this.features[[j]])) {
                 diff.time <- abs(orig.time - this.features[[j]][i, 2])
@@ -118,6 +121,7 @@ two.step.hybrid <- function(folder, info, min.within.batch.prop.detect = 0.1, mi
             }
         }
 
+        # 6. Pair cross-batch rows to within-batch features by m/z window and nearest RT; aggregate if multiple hits
         for (i in 1:nrow(this.aligned)) {
             if (fake3$aligned[i, batch.i + 4] != 0) {
                 sel <- which(fake3$aligned[i, 3] <= this.fake[, 1] & fake3$aligned[i, 4] >= this.fake[, 1] & abs(this.medians - fake3$aligned[i, batch.i + 4]) < 1)
@@ -160,6 +164,7 @@ two.step.hybrid <- function(folder, info, min.within.batch.prop.detect = 0.1, mi
         that.aligned <- cbind(fake3$aligned.ftrs[, 1:4], this.aligned)
         that.pk.time <- cbind(fake3$aligned.ftrs[, 1:4], this.pk.time)
 
+        # 7. Per-file weak-signal recovery using recover.weaker() and current batchwise time maps
         new.this.aligned <- foreach(i = 1:ncol(this.aligned), .combine = cbind) %dopar% {
             r <- recover.weaker(filename = colnames(this.aligned)[i], loc = i, aligned.ftrs = that.aligned, pk.times = that.pk.time, align.mz.tol = batch.align.mz.tol, align.chr.tol = batch.align.chr.tol, this.f1 = batchwise[[batch.i]]$features[[i]], this.f2 = batchwise[[batch.i]]$features2[[i]], mz.range = recover.mz.range, chr.range = recover.chr.range, use.observed.range = use.observed.range, orig.tol = mz.tol, min.bw = min.bw, max.bw = max.bw, bandwidth = .5, recover.min.count = recover.min.count)
 
@@ -168,8 +173,8 @@ two.step.hybrid <- function(folder, info, min.within.batch.prop.detect = 0.1, mi
 
         colnames(new.this.aligned) <- colnames(this.aligned)
 
-        ####
-
+        # If there is only one batch, the aligned matrix will be the new.this.aligned matrix
+        # If there are multiple batches, the aligned matrix will be the cbind of the previous aligned matrix and the new.this.aligned matrix
         if (batch.i == 1) {
             aligned <- new.this.aligned
         } else {
@@ -177,6 +182,7 @@ two.step.hybrid <- function(folder, info, min.within.batch.prop.detect = 0.1, mi
         }
     }
 
+    # 8. Build final cross-batch aligned feature matrix and compute presence per batch
     aligned <- cbind(fake3$aligned.ftrs[, 1:4], aligned)
 
     batch.presence.mat <- matrix(0, nrow = nrow(aligned), ncol = length(batches))
@@ -191,6 +197,7 @@ two.step.hybrid <- function(folder, info, min.within.batch.prop.detect = 0.1, mi
     final.aligned <- aligned[which(batch.presence >= min.batch.prop), ]
 
     stopCluster(cl)
+    # 9. Return both batchwise outputs and final cross-batch table
     to.return <- new("list")
     to.return$batchwise.results <- batchwise
     to.return$all.detected.ftrs <- aligned

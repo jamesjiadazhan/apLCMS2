@@ -32,40 +32,41 @@
 #' this.aligned$pk.times[1:5,]
 #'
 #' @keywords models
+# 1. High-level alignment routine: find tolerances, group by m/z and RT, then construct per-feature intensity/time matrices
 feature.align <- function(features, min.exp = 2, mz.tol = NA, chr.tol = NA, find.tol.max.d = 1e-4, max.align.mz.diff = 0.01, nodes = 1) {
-    # 1. arrange plotting area for progress messages
+    # 2. Arrange plotting panels to display progress messages and QC histograms
     par(mfrow = c(3, 2))
-    # 2. draw empty plot window
+    # 3. Blank canvas for on-screen status
     plot(c(-1, 1), c(-1, 1), type = "n", xlab = "", ylab = "", main = "", axes = FALSE)
-    # 3. print title message
+    # 4. Title text indicating current stage
     text(x = 0, y = 0, "Feature alignment", cex = 2)
-    # 4. prepare a second blank plot
+    # 5. Prepare a second blank plot for upcoming status messages
     plot(c(-1, 1), c(-1, 1), type = "n", xlab = "", ylab = "", main = "", axes = FALSE)
-    # 5. helper: convert peaks belonging to same feature into matrix row
+    # 6. Helper to fold multiple peaks belonging to the same feature into a single row using either sum or median per experiment
     to.attach <- function(this.pick, num.exp, use = "sum") {
 
-        # 6. initialize vector to hold intensity per experiment
+        # 7. Initialize output strengths across experiments
         this.strengths <- rep(0, num.exp)
         if (is.null(nrow(this.pick))) {
 
-            # 7. single observation case assigns intensity to experiment slot
+            # 8. Single observation: place intensity in its experiment slot; copy mz and chr bounds
             this.strengths[this.pick[6]] <- this.pick[5]
             return(c(this.pick[1], this.pick[2], this.pick[1], this.pick[1], this.strengths))
         } else {
             for (m in 1:length(this.strengths)) {
                 cat(m, use)
-                # 8. accumulate intensities from same experiment
+                # 9. Aggregate intensities within the same experiment either by sum or median
                 if (use == "sum") this.strengths[m] <- sum(this.pick[this.pick[, 6] == m, 5])
-                # 9. median intensities when requested
                 if (use == "median") this.strengths[m] <- median(this.pick[this.pick[, 6] == m, 5])
             }
+            # 10. Return representative mz/chr and per-experiment intensities
             return(c(mean(this.pick[, 1]), mean(this.pick[, 2]), min(this.pick[, 1]), max(this.pick[, 1]), this.strengths))
         }
     }
-    # 10. count number of experiments represented
+    # 11. Determine number of experiments; alignment requires at least 2
     num.exp <- nrow(summary(features))
     if (num.exp > 1) {
-        # 11. summarize the list structure of features
+        # 12. Flatten the list of feature matrices into concatenated mz/chr vectors with lab indices
         a <- summary(features)
 
         sizes <- as.numeric(a[, 1]) / ncol(features[[1]])
@@ -80,11 +81,13 @@ feature.align <- function(features, min.exp = 2, mz.tol = NA, chr.tol = NA, find
             chr[(sizes[i] + 1):sizes[i + 1]] <- features[[i]][, 2]
             lab[(sizes[i] + 1):sizes[i + 1]] <- i
         }
+        # 13. Sort by m/z (then RT) to enable tolerance-based segmentation
         o <- order(masses, chr)
         masses <- masses[o]
         chr <- chr[o]
         lab <- lab[o]
         l <- length(masses)
+        # 14. Find/confirm m/z tolerance: either estimate from data or display provided value
         if (is.na(mz.tol)) {
             mz.tol <- find.tol(masses, uppermost = find.tol.max.d)
             if (length(mz.tol) == 0) {
@@ -96,11 +99,13 @@ feature.align <- function(features, min.exp = 2, mz.tol = NA, chr.tol = NA, find
             text(x = 0, y = 0, mz.tol, cex = 1.2)
         }
 
+        # 15. Estimate/confirm RT tolerance using find.tol.time(); display provided values if given
         if (!is.na(chr.tol)) {
             plot(c(-1, 1), c(-1, 1), type = "n", xlab = "", ylab = "", main = "retention time \n tolerance level given", axes = FALSE)
             text(x = 0, y = 0, chr.tol, cex = 1.2)
         }
 
+        # 16. Call helper to segment peaks by m/z and RT; returns group labels and final chr.tol
         all.ft <- find.tol.time(masses, chr, lab, num.exp = num.exp, mz.tol = mz.tol, chr.tol = chr.tol, max.mz.diff = max.align.mz.diff)
         chr.tol <- all.ft$chr.tol
 
@@ -110,11 +115,13 @@ feature.align <- function(features, min.exp = 2, mz.tol = NA, chr.tol = NA, find
         aligned.ftrs <- pk.times <- rep(0, 4 + num.exp)
         mz.sd.rec <- 0
 
+        # 17. Group labels to iterate over candidate features
         labels <- unique(all.ft$grps)
 
         area <- grps <- masses
 
 
+        # 18. For each experiment, attach lab/group information; also keep area
         for (i in 1:num.exp) {        
             this <- features[[i]]
             sel <- which(all.ft$lab == i)
@@ -128,6 +135,7 @@ feature.align <- function(features, min.exp = 2, mz.tol = NA, chr.tol = NA, find
             grps[(sizes[i] + 1):sizes[i + 1]] <- that[, 3]
             lab[(sizes[i] + 1):sizes[i + 1]] <- i
         }
+        # 19. Filter to groups present in >= min.exp experiments; pre-size output
         ttt <- table(all.ft$grps)
         curr.row <- sum(ttt >= min.exp) * 3
         mz.sd.rec <- rep(0, curr.row)
@@ -135,6 +143,7 @@ feature.align <- function(features, min.exp = 2, mz.tol = NA, chr.tol = NA, find
 
         sel.labels <- as.numeric(names(ttt)[ttt >= min.exp])
 
+        # 20. Parallelize loop over selected groups (FORK type on Unix); compute per-feature summaries
         cl <- parallel::makeCluster(8, type = "FORK")
 
         aligned.ftrs <- parallel::parLapply(cl, 1:length(sel.labels), function(i) {
@@ -146,6 +155,7 @@ feature.align <- function(features, min.exp = 2, mz.tol = NA, chr.tol = NA, find
             if (length(sel) > 1) {
                 this <- cbind(masses[sel], chr[sel], chr[sel], chr[sel], area[sel], lab[sel])
                 if (length(unique(this[, 6])) >= min.exp) {
+                    # 21. Within a group, split by m/z density peaks to avoid merging nearby isotopes/adducts
                     this.den <- density(this[, 1], bw = mz.tol * median(this[, 1]))
                     turns <- find.turn.point(this.den$y)
                     pks <- this.den$x[turns$pks]
@@ -160,6 +170,7 @@ feature.align <- function(features, min.exp = 2, mz.tol = NA, chr.tol = NA, find
 
                         if (!is.null(nrow(that))) {
                             if (length(unique(that[, 6])) >= min.exp) {
+                                # 22. Further split by RT density peaks; for each sub-cluster attach intensities and times
                                 that.den <- density(na.omit(that[, 2]), bw = chr.tol / 1.414)
                                 that.turns <- find.turn.point(that.den$y)
                                 that.pks <- that.den$x[that.turns$pks]
@@ -171,6 +182,7 @@ feature.align <- function(features, min.exp = 2, mz.tol = NA, chr.tol = NA, find
                                     thee <- that[that[, 2] > that.lower & that[, 2] <= that.upper, ]
                                     if (!is.null(nrow(thee))) {
                                         if (length(unique(thee[, 6])) >= min.exp) {
+                                            # 23. Build one row per feature using sum of intensities; and a corresponding row using median RT per experiment
                                             this.return <- c(to.attach(thee, num.exp, use = "sum"), to.attach(thee[, c(1, 2, 3, 4, 2, 6)], num.exp, use = "median"), sd(thee[, 1], na.rm = TRUE))
                                             cat(i, j, k, "surprised if we're here\n") 
                                         }
@@ -181,6 +193,7 @@ feature.align <- function(features, min.exp = 2, mz.tol = NA, chr.tol = NA, find
                     }
                 } else {}
             } else {
+                # 24. Degenerate case: group contains a single observation; only valid when min.exp == 1
                 if (min.exp == 1) {
                     thee <- c(masses[sel], chr[sel], chr[sel], chr[sel], area[sel], lab[sel])
                     this.return <- c(to.attach(thee, num.exp, use = "sum"), to.attach(thee[c(1, 2, 3, 4, 2, 6)], num.exp, use = "median"), NA)
@@ -193,7 +206,7 @@ feature.align <- function(features, min.exp = 2, mz.tol = NA, chr.tol = NA, find
         })
         parallel::stopCluster(cl)
         
-        # added code for parlapply
+        # 25. Combine parallel results; split into aligned.ftrs (intensities) and pk.times (times)
         aligned.ftrs <- do.call(rbind, aligned.ftrs)
         pk.times <- aligned.ftrs[, (5 + num.exp):(2 * (4 + num.exp))]
         mz.sd.rec <- aligned.ftrs[, ncol(aligned.ftrs)]
@@ -208,10 +221,12 @@ feature.align <- function(features, min.exp = 2, mz.tol = NA, chr.tol = NA, find
         rec$mz.tol <- mz.tol
         rec$chr.tol <- chr.tol
 
+        # 26. QC histograms: m/z dispersion within features; RT dispersion across experiments
         hist(mz.sd.rec, xlab = "m/z SD", ylab = "Frequency", main = "m/z SD distribution")
         hist(apply(pk.times[, -1:-4], 1, sd, na.rm = TRUE), xlab = "Retention time SD", ylab = "Frequency", main = "Retention time SD distribution")
         return(rec)
     } else {
+        # 27. Nothing to align when only one experiment is present
         message("There is but one experiment.  What are you trying to align?")
         return(0)
     }

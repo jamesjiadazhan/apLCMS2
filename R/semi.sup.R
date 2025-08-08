@@ -55,7 +55,9 @@
 #' @seealso cdf.to.ftrs, proc.cdf, prof.to.feature, adjust.time, feature.align, recover.weaker
 #'
 #' @keywords models
+# 1. High-level semi-supervised pipeline: per-file processing -> time correction -> alignment -> merge to known table -> recovery -> update known table -> return
 semi.sup <- function(folder, file.pattern = ".cdf", known.table = NA, n.nodes = 4, min.exp = 2, min.pres = 0.5, min.run = 12, mz.tol = 1e-5, baseline.correct.noise.percentile = 0.05, shape.model = "bi-Gaussian", BIC.factor = 2, baseline.correct = 0, peak.estim.method = "moment", min.bw = NA, max.bw = NA, sd.cut = c(0.01, 500), sigma.ratio.lim = c(0.01, 100), component.eliminate = 0.01, moment.power = 1, subs = NULL, align.mz.tol = NA, align.chr.tol = NA, max.align.mz.diff = 0.01, pre.process = FALSE, recover.mz.range = NA, recover.chr.range = NA, use.observed.range = TRUE, match.tol.ppm = NA, new.feature.min.count = 2, recover.min.count = 3, intensity.weighted = FALSE) {
+    # 2. Setup: load packages, set working dir, discover and (optionally) subset files
     library(mzR)
     library(doParallel)
     setwd(folder)
@@ -68,6 +70,7 @@ semi.sup <- function(folder, file.pattern = ".cdf", known.table = NA, n.nodes = 
 
     ###############################################################################################
 
+    # 3. Per-file profile and feature extraction with caching and error handling
     dir.create("error_files")
     message("***************************** prifiles --> feature lists *****************************")
     suf.prof <- paste(min.pres, min.run, mz.tol, baseline.correct, sep = "_")
@@ -90,6 +93,7 @@ semi.sup <- function(folder, file.pattern = ".cdf", known.table = NA, n.nodes = 
         features <- foreach(i = 2:length(grps)) %dopar% {
             this.subset <- to.do[(grps[i - 1] + 1):grps[i]]
             for (j in this.subset) {
+                # 4. Build file-specific cache names and compute profile/feature tables
                 this.name <- paste(strsplit(tolower(files[j]), "\\.")[[1]][1], suf, min.bw, max.bw, ".feature", sep = "_")
 
                 this.feature <- NA
@@ -121,6 +125,7 @@ semi.sup <- function(folder, file.pattern = ".cdf", known.table = NA, n.nodes = 
         parallel::stopCluster(cl)
     }
 
+    # 5. Load all cached feature tables for downstream steps
     all.files <- dir()
     sel <- which(files %in% all.files)
     files <- files[sel]
@@ -130,10 +135,12 @@ semi.sup <- function(folder, file.pattern = ".cdf", known.table = NA, n.nodes = 
         this.name <- paste(strsplit(tolower(files[i]), "\\.")[[1]][1], suf, min.bw, max.bw, ".feature", sep = "_")
         cat(this.name, " ")
         load(this.name)
+        
         features[[i]] <- this.feature
     }
 
     ###############################################################################################
+    # 6. Time correction across profiles (adjust.time) and caching to support reruns
     message("****************************** time correction ***************************************")
     suf <- paste(suf, align.mz.tol, align.chr.tol, subs[1], subs[length(subs)], sep = "_")
     this.name <- paste("time_correct_done_", suf, ".bin", sep = "")
@@ -158,6 +165,7 @@ semi.sup <- function(folder, file.pattern = ".cdf", known.table = NA, n.nodes = 
     gc()
 
     ###############################################################################################
+    # 7. Across-profile feature alignment and caching
     message("****************************  aligning features **************************************")
     suf <- paste(suf, min.exp, sep = "_")
     this.name <- paste("aligned_done_", suf, ".bin", sep = "")
@@ -175,6 +183,7 @@ semi.sup <- function(folder, file.pattern = ".cdf", known.table = NA, n.nodes = 
 
 
     ###############################################################################################
+    # 8. Merge aligned table to known feature database using ppm+RT matching and bipartite pairing
     message("************************* merging to known peak table *********************************")
     if (is.na(match.tol.ppm)) match.tol.ppm <- aligned$mz.tol * 1e6
 
@@ -191,7 +200,7 @@ semi.sup <- function(folder, file.pattern = ".cdf", known.table = NA, n.nodes = 
 
         for (i in mass.matched.pos) {
             if (new.assigned[i] == 0) {
-                # find all potentially related known/newly found peaks
+                # 9. Expand candidate sets around an initial ppm hit until closure under ppm proximity
                 old.sel.new <- i
                 this.mz.thres <- aligned$aligned.ftrs[i, 1] * match.tol.ppm / 1e6
                 sel.known <- which(abs(known.table[, 6] - aligned$aligned.ftrs[i, 1]) < this.mz.thres)
@@ -210,6 +219,7 @@ semi.sup <- function(folder, file.pattern = ".cdf", known.table = NA, n.nodes = 
                     sel.new <- unique(sel.new)
                 }
 
+                # 10. Form RT distance matrix for candidate pairs; mask ppm-infeasible entries; greedy 1-1 match under RT threshold
                 time.matched <- mass.matched <- matrix(0, ncol = length(sel.new), nrow = length(sel.known))
 
                 for (k in 1:length(sel.known)) {
@@ -238,6 +248,7 @@ semi.sup <- function(folder, file.pattern = ".cdf", known.table = NA, n.nodes = 
         colnames(new.known.pairing) <- c("new", "known")
         new.known.pairing <- new.known.pairing[-1, ]
 
+        # 11. Add still-unmatched known features as placeholder rows (to be recoverable later)
         to.add.ftrs <- matrix(0, ncol = ncol(aligned$aligned.ftrs), nrow = nrow(known.table) - nrow(new.known.pairing))
         to.add.times <- matrix(NA, ncol = ncol(aligned$aligned.ftrs), nrow = nrow(known.table) - nrow(new.known.pairing))
         sel <- 1:nrow(known.table)
@@ -267,6 +278,7 @@ semi.sup <- function(folder, file.pattern = ".cdf", known.table = NA, n.nodes = 
     gc()
 
     ###############################################################################################
+    # 12. Weak-signal recovery near merged feature locations for each raw file; cache and then reload
     message("**************************** recovering weaker signals *******************************")
     suf <- paste(suf, recover.mz.range, recover.chr.range, use.observed.range, match.tol.ppm, new.feature.min.count, recover.min.count, sep = "_")
 
@@ -296,6 +308,7 @@ semi.sup <- function(folder, file.pattern = ".cdf", known.table = NA, n.nodes = 
 
 
     ##############################################################################################
+    # 13. Reload recovered tables and construct lists for return; then do second-round time correction and alignment
     message("loading feature tables after recovery")
     features.recov <- new("list")
 
@@ -352,7 +365,7 @@ semi.sup <- function(folder, file.pattern = ".cdf", known.table = NA, n.nodes = 
 
     for (i in mass.matched.pos) {
         if (new.assigned[i] == 0) {
-            # find all potentially related known/newly found peaks
+            # 14. Match newly aligned features to known table; update pairing using ppm+RT and greedy 1-1 mapping
             old.sel.new <- i
             this.mz.thres <- aligned.recov$aligned.ftrs[i, 1] * match.tol.ppm / 1e6
             sel.known <- which(abs(known.table[, 6] - aligned.recov$aligned.ftrs[i, 1]) < this.mz.thres)
@@ -407,6 +420,7 @@ semi.sup <- function(folder, file.pattern = ".cdf", known.table = NA, n.nodes = 
 
     if (nrow(new.known.pairing) > 0) {
         for (i in 1:nrow(new.known.pairing)) {
+            # 15. Update known table row using observed intensities and RTs from matched feature
             known.2[new.known.pairing[i, 2], ] <- peak.characterize(existing.row = known.2[new.known.pairing[i, 2], ], ftrs.row = aligned.recov$aligned.ftrs[new.known.pairing[i, 1], ], chr.row = aligned.recov$pk.times[new.known.pairing[i, 1], ])
         }
 
@@ -414,6 +428,7 @@ semi.sup <- function(folder, file.pattern = ".cdf", known.table = NA, n.nodes = 
         newly.found.ftrs <- which(!(1:nrow(aligned.recov$aligned.ftrs) %in% new.known.pairing[, 1]))
         num.exp.found <- apply(aligned.recov$aligned.ftrs != 0, 1, sum)
         for (i in newly.found.ftrs) {
+            # 16. Append truly new features that meet minimum presence across experiments to the known table
             if (num.exp.found[i] >= new.feature.min.count) {
                 this.row <- peak.characterize(existing.row = NA, ftrs.row = aligned.recov$aligned.ftrs[i, ], chr.row = aligned.recov$pk.times[i, ])
                 known.2 <- rbind(known.2, this.row)
@@ -423,6 +438,7 @@ semi.sup <- function(folder, file.pattern = ".cdf", known.table = NA, n.nodes = 
     }
     #################################################################################################
 
+    # 17. Assemble return object including pre- and post-recovery alignments, tolerances, and updated known table
     rec <- new("list")
     colnames(aligned$aligned.ftrs) <- colnames(aligned$pk.times) <- colnames(aligned.recov$aligned.ftrs) <- colnames(aligned.recov$pk.times) <- c("mz", "time", "mz.min", "mz.max", files)
     rec$features <- features.recov

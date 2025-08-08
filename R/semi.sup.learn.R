@@ -63,6 +63,7 @@
 #'
 #' @keywords models
 semi.sup.learn <- function(folder, file.pattern = ".cdf", known.table = NA, n.nodes = 4, min.exp = 2, min.pres = 0.3, min.run = 4, mz.tol = 1e-5, shape.model = "bi-Gaussian", baseline.correct = 0, peak.estim.method = "moment", min.bw = NA, max.bw = NA, sd.cut = c(0.01, 500), component.eliminate = 0.01, moment.power = 1, sigma.ratio.lim = c(0.01, 100), subs = NULL, align.mz.tol = NA, align.chr.tol = NA, max.align.mz.diff = 0.01, pre.process = FALSE, recover.mz.range = NA, recover.chr.range = NA, use.observed.range = TRUE, match.tol.ppm = 5, new.feature.min.count = 2, recover.min.count = 3, use.learn = TRUE, ridge.smoother.window = 50, smoother.window = c(1, 5, 10), pos.confidence = 0.99, neg.confidence = 0.99, max.ftrs.to.use = 10, do.grp.reduce = TRUE, remove.bottom.ftrs = 0, max.fpr = 0.5, min.tpr = 0.9, intensity.weighted = FALSE) {
+    # 1. Setup: libraries, working dir, discover files and optional subsetting
     library(mzR)
     library(doparallel)
     setwd(folder)
@@ -75,6 +76,7 @@ semi.sup.learn <- function(folder, file.pattern = ".cdf", known.table = NA, n.no
 
     ###############################################################################################
 
+    # 2. Parallel per-file processing: ML-based or standard detection to produce .profile and .feature caches
     dir.create("error_files")
     message("***************************** prifiles --> feature lists *****************************")
     suf.prof <- paste(min.pres, min.run, mz.tol, baseline.correct, sep = "_")
@@ -100,6 +102,7 @@ semi.sup.learn <- function(folder, file.pattern = ".cdf", known.table = NA, n.no
 
             processable <- "goodgood"
             if (length(that.exist) == 0) {
+                # 3. If profile cache does not exist, run either ML-based learn.cdf() or conventional proc.cdf()
                 if (use.learn) {
                     message(c(i, "  ", that.name, "  ", as.vector(system.time(processable <- try(this.prof <- learn.cdf(files[i], known.mz = known.table[, 6], tol = mz.tol, min.run = min.run, min.pres = min.pres, match.tol.ppm = match.tol.ppm, baseline.correct = baseline.correct, ridge.smoother.window = ridge.smoother.window, smoother.window = smoother.window, pos.confidence = pos.confidence, neg.confidence = neg.confidence, max.ftrs.to.use = max.ftrs.to.use, do.grp.reduce = do.grp.reduce, remove.bottom.ftrs = remove.bottom.ftrs, max.fpr = max.fpr, min.tpr = min.tpr, intensity.weighted = intensity.weighted))[1]))[1]))
                 } else {
@@ -117,6 +120,7 @@ semi.sup.learn <- function(folder, file.pattern = ".cdf", known.table = NA, n.no
             }
 
             if (substr(processable[1], 1, 5) != "Error") {
+                # 4. Convert processed profiles to feature lists and cache as .feature
                 processable.2 <- "goodgood"
                 message(c(i, "  ", this.name, "  ", as.vector(system.time(processable.2 <- try(this.feature <- prof.to.features(this.prof[[1]], min.bw = min.bw, max.bw = max.bw, sd.cut = sd.cut, shape.model = shape.model, estim.method = peak.estim.method, do.plot = FALSE, component.eliminate = component.eliminate, power = moment.power))))[1]))
 
@@ -143,6 +147,7 @@ semi.sup.learn <- function(folder, file.pattern = ".cdf", known.table = NA, n.no
 
 
     ###############################################################################################
+    # 5. Across-profile time correction (adjust.time) with automatic fallback for making tolerances from match.tol.ppm
     message("****************************** time correction ***************************************")
     suf <- paste(suf, align.mz.tol, align.chr.tol, subs[1], subs[length(subs)], sep = "_")
     this.name <- paste("time_correct_done_", suf, ".bin", sep = "")
@@ -166,6 +171,7 @@ semi.sup.learn <- function(folder, file.pattern = ".cdf", known.table = NA, n.no
     gc()
 
     ###############################################################################################
+    # 6. Align features across profiles (feature.align) using given/auto tolerances; cache
     message("****************************  aligning features **************************************")
     suf <- paste(suf, min.exp, sep = "_")
     this.name <- paste("aligned_done_", suf, ".bin", sep = "")
@@ -183,6 +189,7 @@ semi.sup.learn <- function(folder, file.pattern = ".cdf", known.table = NA, n.no
     gc()
 
     ###############################################################################################
+    # 7. Pair aligned features to known table using ppm and RT criteria; construct merged seed table for recovery
     message("merging to known peak table")
     if (is.na(match.tol.ppm)) match.tol.ppm <- aligned$mz.tol * 1e6
 
@@ -193,10 +200,9 @@ semi.sup.learn <- function(folder, file.pattern = ".cdf", known.table = NA, n.no
     new.assigned <- rep(0, nrow(aligned$aligned.ftrs))
     new.known.pairing <- matrix(0, ncol = 2, nrow = 1)
 
-    for (i in mass.matched.pos)
-    {
+    for (i in mass.matched.pos) {
         if (new.assigned[i] == 0) {
-            # find all potentially related known/newly found peaks
+            # 8. Grow candidate sets around initial ppm hit and produce one-to-one RT match under threshold
             old.sel.new <- i
             this.mz.thres <- aligned$aligned.ftrs[i, 1] * match.tol.ppm / 1e6
             sel.known <- which(abs(known.table[, 6] - aligned$aligned.ftrs[i, 1]) < this.mz.thres)
@@ -260,6 +266,7 @@ semi.sup.learn <- function(folder, file.pattern = ".cdf", known.table = NA, n.no
 
 
     ###############################################################################################
+    # 9. Weak-signal recovery at the raw file level; cache per-file recovery objects
     message("**************************** recovering weaker signals *******************************")
     suf <- paste(suf, recover.mz.range, recover.chr.range, use.observed.range, match.tol.ppm, new.feature.min.count, recover.min.count, sep = "_")
 
@@ -283,6 +290,7 @@ semi.sup.learn <- function(folder, file.pattern = ".cdf", known.table = NA, n.no
     new.aligned <- aligned
     new.aligned$orig.known.table <- known.table
 
+    # 10. Load recovery outputs and inject recovered intensities/times back into alignment containers
     for (i in 1:length(files)) {
         this.name <- paste(strsplit(tolower(files[i]), "\\.")[[1]][1], suf, "semi_sup.recover", sep = "_")
         load(this.name)
@@ -292,6 +300,7 @@ semi.sup.learn <- function(folder, file.pattern = ".cdf", known.table = NA, n.no
         new.aligned$f2[[i]] <- this.recovered$this.f2
     }
 
+    # 11. Use average RT across files to fill empty medians; finalize aligned objects
     new.pk.times <- apply(pk.times[, -1:-4], 1, mean, na.rm = T)
     pk.times[is.na(pk.times[, 2]), 2] <- new.pk.times[is.na(pk.times[, 2])]
     aligned.ftrs[, 2] <- pk.times[, 2]
@@ -300,6 +309,7 @@ semi.sup.learn <- function(folder, file.pattern = ".cdf", known.table = NA, n.no
 
 
     ################## updating known.table ############
+    # 12. Update known table rows for matched features; add new entries for sufficiently recurrent newly detected features
     ### notice aligned.ftrs contains all features from the known table and new data
 
     known.2 <- known.table
@@ -325,6 +335,7 @@ semi.sup.learn <- function(folder, file.pattern = ".cdf", known.table = NA, n.no
     }
 
     #################################################################################################
+    # 13. Filter final aligned outputs by min.exp presence threshold; align bookkeeping pairings accordingly
     sel <- which(num.exp.found >= min.exp)
     new.aligned$aligned.ftrs <- new.aligned$aligned.ftrs[sel, ]
     new.aligned$pk.times <- new.aligned$pk.times[sel, ]
@@ -335,6 +346,7 @@ semi.sup.learn <- function(folder, file.pattern = ".cdf", known.table = NA, n.no
     new.known.pairing <- new.known.pairing[sel, ]
     new.known.pairing[, 1] <- 1:nrow(new.known.pairing)
 
+    # 14. Return final object with before/after recovery alignments and updated known table
     rec <- new("list")
     colnames(aligned$aligned.ftrs) <- colnames(aligned$pk.times) <- colnames(new.aligned$aligned.ftrs) <- colnames(new.aligned$pk.times) <- c("mz", "time", "mz.min", "mz.max", files)
     rec$features <- new.aligned$features

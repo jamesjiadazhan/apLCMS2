@@ -31,7 +31,9 @@
 #' this.feature[1:5,]
 #'
 #' @keywords models
+# 1. Main routine that transforms grouped profile points (EICs) into peak-level features using model-based deconvolution
 prof.to.features <- function(a, bandwidth = 0.5, min.bw = NA, max.bw = NA, sd.cut = c(0.1, 100), sigma.ratio.lim = c(0.1, 10), shape.model = "bi-Gaussian", estim.method = "moment", do.plot = TRUE, power = 1, component.eliminate = 0.01, BIC.factor = 2) {
+    # 2. Validate options for shape and estimation; abort early on invalid input
     if (sum(shape.model %in% c("bi-Gaussian", "Gaussian")) == 0) {
         print("Error: peak shape model has to be Gaussian or bi-Gaussian")
         return(0)
@@ -42,6 +44,7 @@ prof.to.features <- function(a, bandwidth = 0.5, min.bw = NA, max.bw = NA, sd.cu
     }
 
     #####################
+    # 3. Internal helper: EM-style estimator for a single bi-Gaussian curve split at location a
     bigauss.esti.EM <- function(t, x, max.iter = 50, epsilon = 0.005, power = 1, do.plot = FALSE, truth = NA, sigma.ratio.lim = c(0.3, 1)) {
         ## function takes into x and t, and then computes the value of
         ## sigma.1, sigma.2 and a using iterative method. the returned
@@ -49,6 +52,7 @@ prof.to.features <- function(a, bandwidth = 0.5, min.bw = NA, max.bw = NA, sd.cu
         ## whether the termination criteria is satified upon the end of the
         ## program.
 
+        # 4. Remove near-zero intensities; handle trivial cases with 0–1 point
         sel <- which(x > 1e-10)
         if (length(sel) == 0) {
             return(c(median(t), 1, 1, 0))
@@ -63,6 +67,7 @@ prof.to.features <- function(a, bandwidth = 0.5, min.bw = NA, max.bw = NA, sd.cu
         ## and assumed breaking point a, calculates the square estimated of
         ## sigma.1 and sigma.2.
 
+        # 5. Closed-form updates for left/right variances given split point a
         solve.sigma <- function(x, t, a) {
             ## this function prepares the parameters required for latter
             ## compuation. u, v, and sum of x.
@@ -87,6 +92,7 @@ prof.to.features <- function(a, bandwidth = 0.5, min.bw = NA, max.bw = NA, sd.cu
 
         ## thif function solves the value of a using the x, t, a from the
         ## previous step, and sigma.1, and sigma.2
+        # 6. One-step optimal split point given current variances
         solve.a <- function(x, t, a, sigma.1, sigma.2) {
             w <- x * (as.numeric(t < a) / sigma.1 + as.numeric(t >= a) / sigma.2)
             return(sum(t * w) / sum(w))
@@ -96,7 +102,7 @@ prof.to.features <- function(a, bandwidth = 0.5, min.bw = NA, max.bw = NA, sd.cu
         ## a smaller than epsilon will terminate the iteration.
         ## epsilon <- min(diff(sort(t)))/2
 
-        ## using the median value of t as the initial value of a.
+        # 7. Initialize split point at mode; run fixed-point iterations until convergence
         a.old <- t[which(x == max(x))[1]]
         a.new <- a.old
         change <- 10 * epsilon
@@ -112,11 +118,7 @@ prof.to.features <- function(a, bandwidth = 0.5, min.bw = NA, max.bw = NA, sd.cu
             a.new <- solve.a(x, t, a.old, sigma$sigma.1, sigma$sigma.2)
             change <- abs(a.old - a.new)
         }
-        #  return(list(a=a.new,
-        #              sigma.1=sigma$sigma.1,
-        #              sigma.2=sigma$sigma.2,
-        #              iter.end=(max.iter>n.iter)
-        #              ))
+        # 8. Transform estimated split and variances into a piecewise Gaussian scale factor
         d <- x
         sigma$sigma.2 <- sqrt(sigma$sigma.2)
         sigma$sigma.1 <- sqrt(sigma$sigma.1)
@@ -127,6 +129,7 @@ prof.to.features <- function(a, bandwidth = 0.5, min.bw = NA, max.bw = NA, sd.cu
         return(c(a.new, sigma$sigma.1, sigma$sigma.2, scale))
     }
 
+    # 9. Internal helper: moment-based estimator for a single bi-Gaussian curve
     bigauss.esti <- function(x, y, power = 1, do.plot = FALSE, truth = NA, sigma.ratio.lim = c(0.3, 3)) {
         sel <- which(y > 1e-10)
         if (length(sel) < 2) {
@@ -142,15 +145,18 @@ prof.to.features <- function(a, bandwidth = 0.5, min.bw = NA, max.bw = NA, sd.cu
                 true.y2 <- dnorm(x[x >= truth[1]], mean = truth[1], sd = truth[3]) * truth[3] * truth[4]
                 lines(x, c(true.y1, true.y2), col = "green")
             }
+            # 10. Optional power transform to stabilize variance before moments
             max.y.0 <- max(y.0, na.rm = TRUE)
             y <- (y / max.y.0)^power
 
+            # 11. Numerical quadrature weights (approximate) for integrals
             l <- length(x)
             min.d <- min(diff(x))
             dx <- c(x[2] - x[1], (x[3:l] - x[1:(l - 2)]) / 2, x[l] - x[l - 1])
             if (l == 2) dx = rep(diff(x), 2)
             dx[dx > 4 * min.d] <- 4 * min.d
 
+            # 12. Cumulative integrals to enable fast left/right moment computations at all split points
             y.cum <- cumsum(y * dx)
             x.y.cum <- cumsum(y * x * dx)
             xsqr.y.cum <- cumsum(y * x^2 * dx)
@@ -159,6 +165,7 @@ prof.to.features <- function(a, bandwidth = 0.5, min.bw = NA, max.bw = NA, sd.cu
             x.y.cum.rev <- cumsum((x * y * dx)[l:1])[l:1]
             xsqr.y.cum.rev <- cumsum((y * x^2 * dx)[l:1])[l:1]
 
+            # 13. Candidate split region restricted by allowed sigma ratio range
             sel <- which(y.cum >= sigma.ratio.lim[1] / (sigma.ratio.lim[1] + 1) * y.cum[l])
             if (length(sel) > 0) {
                 start <- max(1, min(sel))
@@ -171,6 +178,7 @@ prof.to.features <- function(a, bandwidth = 0.5, min.bw = NA, max.bw = NA, sd.cu
             } else {
                 end <- l - 1
             }
+            # 14. Compute left/right moments and choose split m to balance scale/variance
             if (end <= start) {
                 m <- min(mean(x[start:end]), x[max(which(y.cum.rev > 0))])
             } else {
@@ -195,6 +203,7 @@ prof.to.features <- function(a, bandwidth = 0.5, min.bw = NA, max.bw = NA, sd.cu
 
             if (do.plot) abline(v = m)
 
+            # 15. Left/right standard deviations around chosen split and back-transform if needed
             sel1 <- which(x < m)
             sel2 <- which(x >= m)
             s1 <- sqrt(sum((x[sel1] - m)^2 * y[sel1] * dx[sel1]) / sum(y[sel1] * dx[sel1]))
@@ -206,6 +215,7 @@ prof.to.features <- function(a, bandwidth = 0.5, min.bw = NA, max.bw = NA, sd.cu
                 s2 <- s2 * sqrt(power)
             }
 
+            # 16. Build piecewise Gaussian proxy density and compute scale via least-squares-on-log
             d1 <- dnorm(x[sel1], sd = s1, mean = m)
             d2 <- dnorm(x[sel2], sd = s2, mean = m)
             d <- c(d1 * s1, d2 * s2) # notice this "density" doesnt integrate to 1. Rather it integrates to (s1+s2)/2
@@ -236,12 +246,14 @@ prof.to.features <- function(a, bandwidth = 0.5, min.bw = NA, max.bw = NA, sd.cu
     }
 
     ##############
+    # 17. Internal helper: fit mixture of asymmetric Gaussians to a smoothed EIC with BIC-driven bandwidth selection
     bigauss.mix <- function(x, y, power = 1, do.plot = FALSE, sigma.ratio.lim = c(0.1, 10), bw = c(15, 30, 60), eliminate = .05, max.iter = 25, estim.method, BIC.factor = 2) {
         all.bw <- bw[order(bw)]
 
         x.0 <- x
         y.0 <- y
 
+        # 18. Pre-filter to positive intensities and sort by time
         sel <- y > 1e-5
         x <- x[sel]
         y <- y[sel]
@@ -259,6 +271,7 @@ prof.to.features <- function(a, bandwidth = 0.5, min.bw = NA, max.bw = NA, sd.cu
 
         last.num.pks <- Inf
 
+        # 19. Scan bandwidths (coarse-to-fine) to stabilize peak count; keep the last setting whenever count changes
         for (bw.n in length(all.bw):1) {
             bw <- all.bw[bw.n]
             this.smooth <- ksmooth(x.0, y.0, kernel = "normal", bandwidth = bw)
@@ -274,7 +287,7 @@ prof.to.features <- function(a, bandwidth = 0.5, min.bw = NA, max.bw = NA, sd.cu
                 dx <- c(x[2] - x[1], (x[3:l] - x[1:(l - 2)]) / 2, x[l] - x[l - 1])
                 if (l == 2) dx = rep(diff(x), 2)
 
-                # initiation
+                # 20. Initialize each component by local left/right moment estimates within [valley,peak,valley]
                 m <- s1 <- s2 <- delta <- pks
                 for (i in 1:length(m)) {
                     sel.1 <- which(x >= max(vlys[vlys < m[i]]) & x < m[i])
@@ -295,6 +308,7 @@ prof.to.features <- function(a, bandwidth = 0.5, min.bw = NA, max.bw = NA, sd.cu
                 this.change = Inf
                 counter = 0
 
+                # 21. EM-like refinement with component elimination when contribution is too small (eliminate)
                 while (this.change > 0.1 & counter <= max.iter) {
                     counter <- counter + 1
                     old.m <- m
@@ -376,6 +390,7 @@ prof.to.features <- function(a, bandwidth = 0.5, min.bw = NA, max.bw = NA, sd.cu
                         lines(x, fit[, i], col = cols[i])
                     }
                 }
+                # 22. Compute area proxy per component and BIC for model selection across bandwidths
                 area <- delta * (s1 + s2) / 2
                 rss <- sum((y - apply(fit, 1, sum))^2)
                 l <- length(x)
@@ -388,6 +403,7 @@ prof.to.features <- function(a, bandwidth = 0.5, min.bw = NA, max.bw = NA, sd.cu
                 results[[bw.n]] <- results[[bw.n + 1]]
             }
         }
+        # 23. Select the best bandwidth setting; return parameters and diagnostics
         sel <- which(bic.rec == min(bic.rec, na.rm = TRUE))
         if (length(sel) > 1) sel <- sel[which(all.bw[sel] == max(all.bw[sel]))]
         rec <- new("list")
@@ -400,6 +416,7 @@ prof.to.features <- function(a, bandwidth = 0.5, min.bw = NA, max.bw = NA, sd.cu
     }
 
     #############
+    # 24. Internal helper: Gaussian mixture alternative (symmetric), BIC-driven selection
     normix <- function(that.curve, pks, vlys, ignore = 0.1, max.iter = 50, prob.cut = 1e-2) {
         x <- that.curve[, 1]
         y <- that.curve[, 2]
@@ -432,6 +449,7 @@ prof.to.features <- function(a, bandwidth = 0.5, min.bw = NA, max.bw = NA, sd.cu
                 sc[m] <- exp(sum(fitted[this.sel]^2 * log(this.y[this.sel] / fitted[this.sel]) / sum(fitted[this.sel]^2)))
             }
 
+            # 25. Remove components with invalid parameters; then iteratively refine with weighted updates
             to.erase <- which(is.na(miu) | is.na(sigma) | sigma == 0 | is.na(sc))
             if (length(to.erase) > 0) {
                 l <- l - length(to.erase)
@@ -513,7 +531,7 @@ prof.to.features <- function(a, bandwidth = 0.5, min.bw = NA, max.bw = NA, sd.cu
     }
 
     ##########
-
+    # 26. Internal helper: BIC wrapper for symmetric Gaussian mixture; scans smoothing bandwidths
     normix.bic <- function(x, y, power = 2, do.plot = FALSE, bw = c(15, 30, 60), eliminate = .05, max.iter = 50, BIC.factor = 2) {
         all.bw <- bw[order(bw)]
         sel <- y > 1e-5
@@ -583,10 +601,12 @@ prof.to.features <- function(a, bandwidth = 0.5, min.bw = NA, max.bw = NA, sd.cu
 
     ##########
 
+    # 27. Set default bandwidth range based on overall retention time span when not provided
     if (is.na(min.bw)) min.bw <- diff(range(a[, 2], na.rm = TRUE)) / 60
     if (is.na(max.bw)) max.bw <- diff(range(a[, 2], na.rm = TRUE)) / 15
     if (min.bw >= max.bw) min.bw <- max.bw / 4
 
+    # 28. Build full reference time grid and weights for integration/interpolation
     base.curve <- unique(a[, 2])
     all.span <- range(base.curve)
     base.curve <- base.curve[order(base.curve)]
@@ -597,6 +617,7 @@ prof.to.features <- function(a, bandwidth = 0.5, min.bw = NA, max.bw = NA, sd.cu
     all.times <- (all.times[1:(length(all.times) - 1)] + all.times[2:length(all.times)]) / 2
     all.times <- all.times[2:length(all.times)] - all.times[1:(length(all.times) - 1)]
 
+    # 29. Initialize output feature matrix and iterate through each EIC group in input matrix a
     this.features <- matrix(0, nrow = 1, ncol = 5)
     colnames(this.features) <- c("mz", "pos", "sd1", "sd2", "area")
     n = 1
@@ -607,12 +628,14 @@ prof.to.features <- function(a, bandwidth = 0.5, min.bw = NA, max.bw = NA, sd.cu
     mz.sd.rec <- NA
 
     for (nnn in 1:(length(a.breaks) - 1)) {
+        # 30. Extract one EIC; sort by time; record m/z variability for diagnostics
         this <- a[(a.breaks[nnn] + 1):a.breaks[nnn + 1], ]
         if (is.null(nrow(this))) this <- matrix(this, nrow = 1)
         this <- this[order(this[, 2]), ]
         if (is.null(nrow(this))) this <- matrix(this, nrow = 1)
         mz.sd.rec <- c(mz.sd.rec, sd(this[, 1]))
 
+        # 31. For very short traces, approximate area via interpolation; otherwise do full deconvolution
         this.count.1 <- nrow(this)
         if (this.count.1 <= 10) {
             if (this.count.1 > 1) {
@@ -624,10 +647,12 @@ prof.to.features <- function(a, bandwidth = 0.5, min.bw = NA, max.bw = NA, sd.cu
             }
             this.features <- rbind(this.features, xxx)
         } else {
+            # 32. Build complete time grid for smoother and copy observed intensities to it
             this.span <- range(this[, 2])
             this.curve <- base.curve[base.curve[, 1] >= this.span[1] & base.curve[, 1] <= this.span[2], ]
             this.curve[this.curve[, 1] %in% this[, 2], 2] <- this[, 3]
 
+            # 33. Construct bandwidth candidates around data-driven baseline and fit either bi-Gaussian or Gaussian mixture; convert outputs to sd1, sd2 and area proxy
             bw <- min(max(bandwidth * (this.span[2] - this.span[1]), min.bw), max.bw)
             bw <- seq(bw, 2 * bw, length.out = 3)
             if (bw[1] > 1.5 * min.bw) bw <- c(max(min.bw, bw[1] / 2), bw)
@@ -643,6 +668,7 @@ prof.to.features <- function(a, bandwidth = 0.5, min.bw = NA, max.bw = NA, sd.cu
                 xxx <- bigauss.mix(this.curve[, 1], this.curve[, 2], sigma.ratio.lim = sigma.ratio.lim, bw = bw, power = power, estim.method = estim.method, eliminate = component.eliminate, BIC.factor = BIC.factor)$param[, c(1, 2, 3, 5)]
             }
 
+            # 34. Append one row per detected component; choose m/z by nearest observed time point to component center
             if (is.null(nrow(xxx))) {
                 this.features <- rbind(this.features, c(median(this[, 1]), xxx))
             } else {
@@ -655,11 +681,13 @@ prof.to.features <- function(a, bandwidth = 0.5, min.bw = NA, max.bw = NA, sd.cu
 
         # message(nnn)
     }
+    # 35. Finalize feature table: remove placeholder, order by mz/time, and filter on sd limits
     this.features <- this.features[-1, ]
     this.features <- this.features[order(this.features[, 1], this.features[, 2]), ]
     this.features <- this.features[which(apply(this.features[, 3:4], 1, min) > sd.cut[1] & apply(this.features[, 3:4], 1, max) < sd.cut[2]), ]
     rownames(this.features) <- NULL
 
+    # 36. Optional overview plots for QC: m/z SD, RT SD, and peak strength distributions
     if (do.plot) {
         par(mfrow = c(2, 2))
         plot(c(-1, 1), c(-1, 1), type = "n", xlab = "", ylab = "", main = "", axes = FALSE)
@@ -669,5 +697,6 @@ prof.to.features <- function(a, bandwidth = 0.5, min.bw = NA, max.bw = NA, sd.cu
         hist(log10(this.features[, 5]), xlab = "peak strength (log scale)", ylab = "Frequency", main = "Peak strength distribution")
     }
 
+    # 37. Return assembled feature matrix
     return(this.features)
 }
