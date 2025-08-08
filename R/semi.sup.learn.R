@@ -78,7 +78,7 @@ semi.sup.learn <- function(folder, file.pattern = ".cdf", known.table = NA, n.no
 
     # 2. Parallel per-file processing: ML-based or standard detection to produce .profile and .feature caches
     dir.create("error_files")
-    message("***************************** prifiles --> feature lists *****************************")
+    message("***************************** Profile data --> feature lists *****************************")
     suf.prof <- paste(min.pres, min.run, mz.tol, baseline.correct, sep = "_")
     if (use.learn) suf.prof <- paste(min.run, min.pres, ridge.smoother.window, mz.tol, baseline.correct, max.ftrs.to.use, do.grp.reduce, remove.bottom.ftrs, max.fpr, min.tpr, sep = "_")
     suf <- paste(suf.prof, shape.model, min.run, min.pres, sd.cut[1], sd.cut[2], component.eliminate, moment.power, sep = "_")

@@ -72,7 +72,7 @@ semi.sup <- function(folder, file.pattern = ".cdf", known.table = NA, n.nodes = 
 
     # 3. Per-file profile and feature extraction with caching and error handling
     dir.create("error_files")
-    message("***************************** prifiles --> feature lists *****************************")
+    message("***************************** Profile data --> feature lists *****************************")
     suf.prof <- paste(min.pres, min.run, mz.tol, baseline.correct, sep = "_")
     suf <- paste(suf.prof, shape.model, sd.cut[1], sd.cut[2], component.eliminate, moment.power, sep = "_")
     if (shape.model == "bi-Gaussian") suf <- paste(suf, sigma.ratio.lim[1], sigma.ratio.lim[2], sep = "_")
