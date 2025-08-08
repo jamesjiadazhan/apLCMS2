@@ -33,28 +33,39 @@
 #'
 #' @keywords models
 feature.align <- function(features, min.exp = 2, mz.tol = NA, chr.tol = NA, find.tol.max.d = 1e-4, max.align.mz.diff = 0.01, nodes = 1) {
+    # 1. arrange plotting area for progress messages
     par(mfrow = c(3, 2))
+    # 2. draw empty plot window
     plot(c(-1, 1), c(-1, 1), type = "n", xlab = "", ylab = "", main = "", axes = FALSE)
+    # 3. print title message
     text(x = 0, y = 0, "Feature alignment", cex = 2)
+    # 4. prepare a second blank plot
     plot(c(-1, 1), c(-1, 1), type = "n", xlab = "", ylab = "", main = "", axes = FALSE)
+    # 5. helper: convert peaks belonging to same feature into matrix row
     to.attach <- function(this.pick, num.exp, use = "sum") {
 
+        # 6. initialize vector to hold intensity per experiment
         this.strengths <- rep(0, num.exp)
         if (is.null(nrow(this.pick))) {
 
+            # 7. single observation case assigns intensity to experiment slot
             this.strengths[this.pick[6]] <- this.pick[5]
             return(c(this.pick[1], this.pick[2], this.pick[1], this.pick[1], this.strengths))
         } else {
             for (m in 1:length(this.strengths)) {
                 cat(m, use)
+                # 8. accumulate intensities from same experiment
                 if (use == "sum") this.strengths[m] <- sum(this.pick[this.pick[, 6] == m, 5])
+                # 9. median intensities when requested
                 if (use == "median") this.strengths[m] <- median(this.pick[this.pick[, 6] == m, 5])
             }
             return(c(mean(this.pick[, 1]), mean(this.pick[, 2]), min(this.pick[, 1]), max(this.pick[, 1]), this.strengths))
         }
     }
+    # 10. count number of experiments represented
     num.exp <- nrow(summary(features))
     if (num.exp > 1) {
+        # 11. summarize the list structure of features
         a <- summary(features)
 
         sizes <- as.numeric(a[, 1]) / ncol(features[[1]])
