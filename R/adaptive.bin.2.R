@@ -24,17 +24,21 @@
 #'
 #' @keywords models
 adaptive.bin.2 <- function(x, tol, ridge.smoother.window = 50, baseline.correct) {
+    # 1. Pull out mass, time, and intensity vectors
     masses <- x$masses
     labels <- x$labels
     intensi <- x$intensi
     times <- x$times
 
+    # 2. Remove original object to free memory
     rm(x)
 
+    # 3. Prepare base curve of unique times
     base.curve <- unique(times)
     base.curve <- base.curve[order(base.curve)]
     base.curve <- cbind(base.curve, base.curve * 0)
 
+    # 4. Sort observations by mass
     curr.order <- order(masses)
     intensi <- intensi[curr.order]
     labels <- labels[curr.order]
@@ -42,18 +46,17 @@ adaptive.bin.2 <- function(x, tol, ridge.smoother.window = 50, baseline.correct)
 
     rm(curr.order)
 
+    # 5. Estimate global mass density and locate valleys
     cat(c("m/z tolerance is: ", tol, "\n"))
-
     l <- length(masses)
-
     curr.bw <- 0.5 * tol * max(masses)
     all.mass.den <- density(masses, weights = intensi / sum(intensi), bw = curr.bw, n = 2^min(15, floor(log2(l)) - 2))
     all.mass.turns <- find.turn.point(all.mass.den$y)
     all.mass.vlys <- all.mass.den$x[all.mass.turns$vlys]
     breaks <- c(0, unique(round(approx(masses, 1:l, xout = all.mass.vlys, rule = 2, ties = 'ordered')$y))[-1])
 
-    grps <- masses * 0 # this is which peak group the signal belongs to, not time group
-
+    # 6. Initialize bookkeeping
+    grps <- masses * 0
     times <- unique(labels)
     times <- times[order(times)]
     curr.label <- 1
@@ -67,6 +70,7 @@ adaptive.bin.2 <- function(x, tol, ridge.smoother.window = 50, baseline.correct)
     prof.pointer <- 1
     height.pointer <- 1
 
+    # 7. Iterate through mass-density valleys
     for (i in 1:(length(breaks) - 1)) {
         this.labels <- labels[(breaks[i] + 1):breaks[i + 1]]
         this.masses <- masses[(breaks[i] + 1):breaks[i + 1]]
@@ -84,7 +88,7 @@ adaptive.bin.2 <- function(x, tol, ridge.smoother.window = 50, baseline.correct)
         mass.pks <- mass.den$x[mass.turns$pks]
         mass.vlys <- c(-Inf, mass.den$x[mass.turns$vlys], Inf)
 
-
+        # 8. Process each peak within the slice
         for (j in 1:length(mass.pks)) {
             mass.lower <- max(mass.vlys[mass.vlys < mass.pks[j]])
             mass.upper <- min(mass.vlys[mass.vlys > mass.pks[j]])
@@ -97,10 +101,12 @@ adaptive.bin.2 <- function(x, tol, ridge.smoother.window = 50, baseline.correct)
                 that.masses <- this.masses[mass.sel]
                 that.intensi <- this.intensi[mass.sel]
 
+                # 9. Record pre-merge mass spread statistics
                 that.masses.mean <- weighted.mean(that.masses, that.intensi)
                 mz.range.before.merge <- abs(diff(range(that.masses))) / that.masses.mean
                 mz.sd.before.merge <- sqrt(weighted.mean((that.masses - that.masses.mean)^2, that.intensi)) / that.masses.mean
 
+                # 10. Merge contiguous time segments
                 that.merged <- merge.seq.3(that.labels, that.masses, that.intensi)
                 if (nrow(that.merged) == 1) {
                     new.merged <- that.merged
@@ -114,6 +120,7 @@ adaptive.bin.2 <- function(x, tol, ridge.smoother.window = 50, baseline.correct)
                 that.range <- diff(range(that.labels))
                 that.RT.peak.loc <- that.labels[which(that.intensi == max(that.intensi))[1]]
 
+                # 11. Remove ridge background if peak spans long time
                 if (that.range > 0.5 * time.range & length(that.labels) > that.range / aver.time.range * 0.6) {
                     that.intensi <- rm.ridge(that.labels, that.intensi, bw = max(ridge.smoother.window, that.range / 2))
 
@@ -123,6 +130,7 @@ adaptive.bin.2 <- function(x, tol, ridge.smoother.window = 50, baseline.correct)
                     that.intensi <- that.intensi[that.sel]
                 }
 
+                # 12. Store cleaned segment and statistics
                 that.n <- length(that.masses)
                 newprof[prof.pointer:(prof.pointer + that.n - 1), ] <- cbind(that.masses, that.labels, that.intensi, rep(curr.label, that.n))
                 prof.pointer <- prof.pointer + that.n
@@ -134,11 +142,12 @@ adaptive.bin.2 <- function(x, tol, ridge.smoother.window = 50, baseline.correct)
         }
     }
 
+    # 13. Trim matrices and order results
     newprof <- newprof[1:(prof.pointer - 1), ]
     height.rec <- height.rec[1:(height.pointer - 1), ]
-
     newprof <- newprof[order(newprof[, 1], newprof[, 2]), ]
 
+    # 14. Assemble and return profile list
     raw.prof <- new("list")
     raw.prof$height.rec <- height.rec
     raw.prof$masses <- newprof[, 1]

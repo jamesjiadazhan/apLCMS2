@@ -24,19 +24,30 @@
 #'
 #' @keywords models
 adjust.time <- function(features, mz.tol = NA, chr.tol = NA, colors = NA, find.tol.max.d = 1e-4, max.align.mz.diff = 0.01) {
+    # 1. Summarize feature list to determine number of experiments
     num.exp <- nrow(summary(features))
+    # 2. Proceed only when multiple experiments are present
     if (num.exp > 1) {
+        # 3. Prepare plotting window for progress display
         par(mfrow = c(2, 2))
+        # 4. Draw a blank plot as canvas
         plot(c(-1, 1), c(-1, 1), type = "n", xlab = "", ylab = "", main = "", axes = FALSE)
+        # 5. Annotate plot with task title
         text(x = 0, y = 0, "Retention time \n adjustment", cex = 2)
 
+        # 6. Summarize each feature matrix
         a <- summary(features)
+        # 7. Calculate sizes of feature sets
         sizes <- as.numeric(a[, 1]) / ncol(features[[1]])
+        # 8. Convert sizes to cumulative indices for vector assembly
         sizes <- cumsum(sizes)
         # 		sel<-max(which(sizes<=5e6))
+        # 9. Use all available profiles
         sel <- length(sizes)
 
+        # 10. Initialize vectors to store m/z, retention times, and labels
         mz <- chr <- lab <- rep(0, sizes[sel])
+        # 11. Add starting zero for index offsets
         sizes <- c(0, sizes)
 
         for (i in 1:sel) {

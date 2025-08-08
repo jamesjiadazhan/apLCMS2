@@ -16,12 +16,18 @@
 #' @keywords models
 # x is retention time, all.w is weight of each all.x, y is observed intensities
 interpol.area <- function(x, y, all.x, all.w) {
+    # 1. Determine range of observed retention times
     r <- range(x)
+    # 2. Select indices within observed range
     x.sel <- which(all.x >= r[1] & all.x <= r[2])
 
+    # 3. Extract corresponding retention times
     x2 <- all.x[x.sel]
+    # 4. Extract weights for selected times
     w <- all.w[x.sel]
 
+    # 5. Linearly interpolate missing intensities at selected times
     y2 <- approx(x, y, xout = x2, method = "linear")$y
+    # 6. Compute weighted area under interpolated curve
     return(sum(w * y2))
 }
