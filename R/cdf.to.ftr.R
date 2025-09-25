@@ -182,7 +182,6 @@ cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2
 
         ###############################################################################################
         message("**************************** recovering weaker signals *******************************")
-        message("it's this one I guess")
         # 11. Weak-signal recovery around aligned features; cache per-file recoveries
         suf <- paste(suf, recover.mz.range, recover.chr.range, use.observed.range, sep = "_")
 
