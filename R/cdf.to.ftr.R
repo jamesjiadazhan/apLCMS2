@@ -214,6 +214,24 @@ cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2
 
         # 12. Build final alignment object by injecting recovered intensities/times; collect outputs for return
         new.aligned <- aligned
+
+        # initial assembly of return list object consolidating aligned and gap filled feature tables
+
+        ## update the feature aligned feature table's column names
+        colnames(aligned$aligned.ftrs) <- c("mz", "time", "mz.min", "mz.max", files)
+        colnames(aligned$pk.times) <- c("mz", "time", "mz.min", "mz.max", files)
+
+        ## initate a new list
+        rec <- new("list")
+
+        ## add data from feature aligned feature table to the list
+        rec$aligned.ftrs <- aligned$aligned.ftrs
+        rec$pk.times <- aligned$pk.times
+
+        ## remove aligned to save memory
+        rm(aligned)
+        gc()
+        
         for (i in 1:length(files)) {
             this.name <- paste(strsplit(tolower(files[i]), "\\.")[[1]][1], suf, ".recover", sep = "_")
             load(this.name)
@@ -221,24 +239,29 @@ cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2
             new.aligned$pk.times[, i + 4] <- this.recovered$this.times
             new.aligned$features[[i]] <- this.recovered$this.f1
             new.aligned$f2[[i]] <- this.recovered$this.f2
-            gc()
         }
 
+        # clear memory
+        gc()
+
         #################################################################################################
-        message("Final assembly of return list object consolidating raw, adjusted, aligned and recovered tables")
-        # 13. Final assembly of return list object consolidating raw, adjusted, aligned and recovered tables
-        rec <- new("list")
-        colnames(aligned$aligned.ftrs) <- colnames(aligned$pk.times) <- colnames(new.aligned$aligned.ftrs) <- colnames(new.aligned$pk.times) <- c("mz", "time", "mz.min", "mz.max", files)
+        message("Final assembly of return list object consolidating aligned and gap filled feature tables")
+        # 13. Final assembly of return list object consolidating aligned and gap filled feature tables
+
+        ## update column names
+        colnames(new.aligned$aligned.ftrs) <- c("mz", "time", "mz.min", "mz.max", files)
+        colnames(new.aligned$pk.times) <- c("mz", "time", "mz.min", "mz.max", files)
+
+        ## add gap filled data into the list
         rec$features <- new.aligned$features
         rec$features2 <- new.aligned$f2
-        rec$aligned.ftrs <- aligned$aligned.ftrs
-        rec$pk.times <- aligned$pk.times
         rec$final.ftrs <- new.aligned$aligned.ftrs
         rec$final.times <- new.aligned$pk.times
         rec$align.mz.tol <- new.aligned$mz.tol
         rec$align.chr.tol <- new.aligned$chr.tol
         rec$mz.tol <- mz.tol
 
+        ## return the list. final.ftrs is the feature table with both feature alignment and gap filling. aligned.ftrs is the feature table with only feature alignment.
         return(rec)
     }
 }
