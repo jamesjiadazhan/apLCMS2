@@ -333,6 +333,7 @@
     to.return$this.ftrs <- this.ftrs
     to.return$this.times <- this.times
     to.return$this.f1 <- duplicate.row.remove(this.f1)
+    # this is a new debug code. When the study is huge, LC-MS HILIC positive mode may generate NA retention time data during the gap filling and cause the entire gap filling pipeline to fail. Here, when retention time NA is detected, it is removed. 
     this.f2 = this.f2[!is.na(this.f2[, 2]), ]
     to.return$this.f2 <- duplicate.row.remove(this.f2)
 
