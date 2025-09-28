@@ -66,15 +66,18 @@ cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2
     # prepare for the log file that may be used for debugging
     logfile <- file.path(folder, paste0("cdf.to.ftr.runlog_", format(Sys.time(), "%Y%m%d-%H%M%S"), ".txt"))
     
-    # capture stdout and messages/warnings/errors
-    sink(logfile, split = TRUE)
-    sink(logfile, type = "message", append = TRUE)
-
-    # ensure output is restored at function exist
+    # open ONE connection and use it for both stdout and messages
+    log_con <- file(logfile, open = "wt")  # or "at" if you truly want to append across runs
+    sink(log_con, split = TRUE)            # stdout
+    sink(log_con, type = "message")        # messages/warnings/errors
+    
+    # ensure sinks and connection are restored/closed on exit
     on.exit({
-        if (sink.number(type = "message") > 0) sink(type = "message")
-        while (sink.number() > 0) sink()
+      if (sink.number(type = "message") > 0) sink(type = "message")
+      while (sink.number() > 0) sink()
+      try(close(log_con), silent = TRUE)
     }, add = TRUE)
+
     
     files <- dir(pattern = file.pattern, ignore.case = TRUE)
     files <- files[order(files)]
