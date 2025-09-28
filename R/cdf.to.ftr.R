@@ -52,11 +52,29 @@
 #' @keywords models
 # 1. Top-level pipeline: per-file preprocessing -> feature extraction -> (optional) time correction -> feature alignment -> recovery -> return tables
 cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2, min.pres = 0.5, min.run = 12, mz.tol = 1e-5, baseline.correct.noise.percentile = 0.05, shape.model = "bi-Gaussian", BIC.factor = 2, baseline.correct = 0, peak.estim.method = "moment", min.bw = NA, max.bw = NA, sd.cut = c(0.01, 500), sigma.ratio.lim = c(0.01, 100), component.eliminate = 0.01, moment.power = 1, subs = NULL, align.mz.tol = NA, align.chr.tol = NA, max.align.mz.diff = 0.01, pre.process = FALSE, recover.mz.range = NA, recover.chr.range = NA, use.observed.range = TRUE, recover.min.count = 3, intensity.weighted = FALSE) {
+
     # 2. Load dependencies; set working folder; enumerate candidate files and (optionally) subset
     library(mzR)
     library(doParallel)
     setwd(folder)
 
+    # save the current function setting
+    settings_list <- as.list(environment())
+    write.table(as.data.frame(settings_list), file = file.path(folder, "cdf.to.ftr.settings.txt"))
+
+    # prepare for the log file that may be used for debugging
+    logfile <- file.path(folder, paste0("cdf.to.ftr.runlog_", format(Sys.time(), "%Y%m%d-%H%M%S"), ".txt"))
+
+    # capture stdout and messages/warnings/errors
+    sink(logfile, split = TRUE)
+    sink(logfile, type = "message", append = TRUE)
+
+    # ensure output is restored at function exist
+    on.exit({
+        sink(type = "message")
+        sink()
+    }, add = TRUE)
+    
     files <- dir(pattern = file.pattern, ignore.case = TRUE)
     files <- files[order(files)]
     if (!is.null(subs)) {
