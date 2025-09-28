@@ -67,7 +67,7 @@ cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2
 
     # 3. Prepare per-file work identifiers and suffixes for caching; create error bin for problem files
     dir.create("error_files")
-    message("***************************** profile data --> feature lists *****************************")
+    message("***************************** convert profile LC-MS data into LC-MS feature lists for each sample *****************************")
     suf.prof <- paste(min.pres, min.run, mz.tol, baseline.correct, sep = "_")
     suf <- paste(suf.prof, shape.model, sd.cut[1], sd.cut[2], component.eliminate, moment.power, sep = "_")
     if (shape.model == "bi-Gaussian") suf <- paste(suf, sigma.ratio.lim[1], sigma.ratio.lim[2], sep = "_")
@@ -125,6 +125,7 @@ cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2
     }
 
     # 8. Restrict to files with available outputs; load all feature tables into a list
+    message("Loading the extracted feature tables from each sample into a list")
     all.files <- dir()
     sel <- which(files %in% all.files)
     files <- files[sel]
@@ -160,6 +161,7 @@ cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2
             parallel::stopCluster(cl)
         } else {
             load(this.name)
+            message("Previously done time corrected feature table is loaded")
         }
         gc()
 
@@ -177,6 +179,7 @@ cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2
 
         } else {
             load(this.name)
+            message("Previously done aligned feature table is loaded")
         }
         gc()
 
