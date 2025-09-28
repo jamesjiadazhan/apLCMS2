@@ -60,7 +60,8 @@ cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2
 
     # save the current function setting
     settings_list <- as.list(environment())
-    write.table(as.data.frame(settings_list), file = file.path(folder, "cdf.to.ftr.settings.txt"))
+    settings_list <- as.data.frame(settings_list)
+    write.table(settings_list, file = file.path(folder, "cdf.to.ftr.settings.txt"), row.names = FALSE)
 
     # prepare for the log file that may be used for debugging
     logfile <- file.path(folder, paste0("cdf.to.ftr.runlog_", format(Sys.time(), "%Y%m%d-%H%M%S"), ".txt"))
