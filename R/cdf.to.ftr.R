@@ -64,6 +64,8 @@ cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2
 
     # prepare for the log file that may be used for debugging
     logfile <- file.path(folder, paste0("cdf.to.ftr.runlog_", format(Sys.time(), "%Y%m%d-%H%M%S"), ".txt"))
+    # Open the text file connection for later log file update
+    log_con <- file(logfile, open = "wt")   
 
     # capture stdout and messages/warnings/errors
     sink(logfile, split = TRUE)
@@ -73,6 +75,7 @@ cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2
     on.exit({
         sink(type = "message")
         sink()
+        close(log_con)
     }, add = TRUE)
     
     files <- dir(pattern = file.pattern, ignore.case = TRUE)
