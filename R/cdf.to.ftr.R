@@ -132,7 +132,7 @@ cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2
     features <- new("list")
     for (i in 1:length(files)) {
         this.name <- paste(strsplit(tolower(files[i]), "\\.")[[1]][1], suf, min.bw, max.bw, ".feature", sep = "_")
-        cat(this.name, " ")
+        cat(this.name, "\n")
         load(this.name)
         features[[i]] <- this.feature
     }
@@ -203,7 +203,7 @@ cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2
                 this.subset <- to.do[(grps[i - 1] + 1):grps[i]]
                 for (j in this.subset) {
                     this.name <- paste(strsplit(tolower(files[j]), "\\.")[[1]][1], suf, ".recover", sep = "_")
-                    cat(this.name)
+                    cat(this.name, "\n")
                     this.recovered <- recover.weaker(filename = files[j], loc = j, aligned.ftrs = aligned$aligned.ftrs, pk.times = aligned$pk.times, align.mz.tol = aligned$mz.tol, align.chr.tol = aligned$chr.tol, this.f1 = features[[j]], this.f2 = f2[[j]], mz.range = recover.mz.range, chr.range = recover.chr.range, use.observed.range = use.observed.range, orig.tol = mz.tol, min.bw = min.bw, max.bw = max.bw, bandwidth = .5, recover.min.count = recover.min.count)
                     save(this.recovered, file = this.name)
                 }
