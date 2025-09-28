@@ -174,7 +174,7 @@ cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2
         is.done <- all.files[which(all.files == this.name)]
         if (length(is.done) == 0) {
 
-            message(c("***** aligning features, CPU time (seconds): ", as.vector(system.time(aligned <- feature.align(f2, min.exp = min.exp, mz.tol = align.mz.tol, chr.tol = align.chr.tol, find.tol.max.d = 10 * mz.tol, max.align.mz.diff = max.align.mz.diff)))[1]))
+            message(c("***** aligning features, CPU time (seconds): ", as.vector(system.time(aligned <- feature.align(f2, min.exp = min.exp, mz.tol = align.mz.tol, chr.tol = align.chr.tol, find.tol.max.d = 10 * mz.tol, max.align.mz.diff = max.align.mz.diff, n.nodes = n.nodes)))[1]))
             save(aligned, file = this.name)
 
         } else {

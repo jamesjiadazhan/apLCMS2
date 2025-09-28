@@ -8,7 +8,7 @@
 #' @param chr.tol The retention time tolerance level for peak alignment. The default is NA, which allows the program to search for the tolerance level based on the data.
 #' @param find.tol.max.d Argument passed to find.tol(). Consider only m/z diffs smaller than this value.This is only used when the mz.tol is NA.
 #' @param max.align.mz.diff As the m/z tolerance is expressed in relative terms (ppm), it may not be suitable when the m/z range is wide. This parameter limits the tolerance in absolute terms. It mostly influences feature matching in higher m/z range.
-#' @param nodes The number of CPU cores to be used through parallel processing.
+#' @param n.nodes The number of CPU cores to be used through parallel processing.
 #'
 #' @details The function first searches for the m/z tolerance level using a mixture model. After the mz.tol is obtained, the peaks are grouped based on it. Consecutive peaks with m/z value difference smaller than the tolerance level are considered to belong to the same peak group. Non-parametric density estimation within each peak group is used to further split peak groups.
 #' The function then searches for the retention time tolerance level. Because the peaks are grouped using m/z, only metabolites that share m/z require this parameter. A rather lenient retention time tolerance level is found using a mixture model. After splitting the peak groups by this value, non-parametric density estimation is used to further split peak groups. Peaks belonging to one group are considered to correspond to the same feature.
@@ -33,7 +33,7 @@
 #'
 #' @keywords models
 # 1. High-level alignment routine: find tolerances, group by m/z and RT, then construct per-feature intensity/time matrices
-feature.align <- function(features, min.exp = 2, mz.tol = NA, chr.tol = NA, find.tol.max.d = 1e-4, max.align.mz.diff = 0.01, nodes = 1) {
+feature.align <- function(features, min.exp = 2, mz.tol = NA, chr.tol = NA, find.tol.max.d = 1e-4, max.align.mz.diff = 0.01, n.nodes = 1) {
     # 2. Arrange plotting panels to display progress messages and QC histograms
     par(mfrow = c(3, 2))
     # 3. Blank canvas for on-screen status
@@ -143,8 +143,8 @@ feature.align <- function(features, min.exp = 2, mz.tol = NA, chr.tol = NA, find
 
         sel.labels <- as.numeric(names(ttt)[ttt >= min.exp])
 
-        # 20. Parallelize loop over selected groups (FORK type on Unix); compute per-feature summaries
-        cl <- parallel::makeCluster(8, type = "FORK")
+        # 20. Parallelize loop over selected groups; compute per-feature summaries
+        cl <- parallel::makeCluster(n.nodes)
 
         aligned.ftrs <- parallel::parLapply(cl, 1:length(sel.labels), function(i) {
 
