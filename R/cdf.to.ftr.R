@@ -119,7 +119,8 @@ cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2
                     }
                 }
             }
-            1
+            ## suppress massive printing from %dopar%
+            NULL
         }
         parallel::stopCluster(cl)
     }
