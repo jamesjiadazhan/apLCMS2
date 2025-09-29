@@ -54,7 +54,6 @@ feature.align <- function(features, min.exp = 2, mz.tol = NA, chr.tol = NA, find
             return(c(this.pick[1], this.pick[2], this.pick[1], this.pick[1], this.strengths))
         } else {
             for (m in 1:length(this.strengths)) {
-                cat(m, use)
                 # 9. Aggregate intensities within the same experiment either by sum or median
                 if (use == "sum") this.strengths[m] <- sum(this.pick[this.pick[, 6] == m, 5])
                 if (use == "median") this.strengths[m] <- median(this.pick[this.pick[, 6] == m, 5])
@@ -184,7 +183,6 @@ feature.align <- function(features, min.exp = 2, mz.tol = NA, chr.tol = NA, find
                                         if (length(unique(thee[, 6])) >= min.exp) {
                                             # 23. Build one row per feature using sum of intensities; and a corresponding row using median RT per experiment
                                             this.return <- c(to.attach(thee, num.exp, use = "sum"), to.attach(thee[, c(1, 2, 3, 4, 2, 6)], num.exp, use = "median"), sd(thee[, 1], na.rm = TRUE))
-                                            cat(i, j, k, "surprised if we're here\n") 
                                         }
                                     }
                                 }
