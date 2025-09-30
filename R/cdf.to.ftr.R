@@ -53,25 +53,16 @@
 # 1. Top-level pipeline: per-file preprocessing -> feature extraction -> (optional) time correction -> feature alignment -> recovery -> return tables
 cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2, min.pres = 0.5, min.run = 12, mz.tol = 1e-5, baseline.correct.noise.percentile = 0.05, shape.model = "bi-Gaussian", BIC.factor = 2, baseline.correct = 0, peak.estim.method = "moment", min.bw = NA, max.bw = NA, sd.cut = c(0.01, 500), sigma.ratio.lim = c(0.01, 100), component.eliminate = 0.01, moment.power = 1, subs = NULL, align.mz.tol = NA, align.chr.tol = NA, max.align.mz.diff = 0.01, pre.process = FALSE, recover.mz.range = NA, recover.chr.range = NA, use.observed.range = TRUE, recover.min.count = 3, intensity.weighted = FALSE) {
 
-    # ---- Parallel plan & progress setup (portable) ----
-    if (!requireNamespace("future", quietly = TRUE)) install.packages("future")
-    if (!requireNamespace("future.apply", quietly = TRUE)) install.packages("future.apply")
-    if (!requireNamespace("progressr", quietly = TRUE)) install.packages("progressr")
-
-    library(future)
-    library(future.apply)
+    # set up a progress bar: this helps to track the running status for functions (they typically take a lot of time to run!)
+    if (!requireNamespace("progressr", quietly = TRUE)) {
+        install.packages("progressr")
+    }
     library(progressr)
-    # library(doParallel)
-
-    # plan: change to cluster/SLURM via future.batchtools later if you want
-    plan(multisession, workers = n.nodes)
-    handlers(global = TRUE)                # choose UI: handler_cli(), handler_txtprogressbar(), etc.
-    options(progressr.enable = TRUE)
-
+    handlers(global = TRUE)
+    
     # 2. Load dependencies; set working folder; enumerate candidate files and (optionally) subset
     library(mzR)
-
-    # set up working directory (where apLCMS reads mzML or mzXML files)
+    library(doParallel)
     setwd(folder)
 
     # save the current function setting
@@ -116,96 +107,58 @@ cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2
 
     # 4. Parallel block: for each file, produce raw profile via proc.cdf(), then feature table via prof.to.features(); cache outputs
     if (length(to.do) > 0) {
+        grps <- round(seq(0, length(to.do), length = n.nodes + 1))
+        grps <- unique(grps)
 
-        # helper: do one file index j (keeps body readable and re-usable)
-        .process_one <- function(j, files, suf, suf.prof,
-                                 min.pres, min.run, mz.tol,
-                                 baseline.correct, baseline.correct.noise.percentile,
-                                 intensity.weighted, min.bw, max.bw, sd.cut,
-                                 shape.model, peak.estim.method, component.eliminate,
-                                 moment.power, BIC.factor) {
-    
-            # ensure required pkg is visible on workers
-            if (!"apLCMS" %in% loadedNamespaces()) {
-                suppressPackageStartupMessages(require(apLCMS, quietly = TRUE, character.only = TRUE))
-            }
-    
-            feature.name <- paste(strsplit(tolower(files[j]), "\\.")[[1]][1], suf,     min.bw, max.bw, ".feature", sep = "_")
-            profile.name <- paste(strsplit(tolower(files[j]), "\\.")[[1]][1], suf.prof,         ".profile",       sep = "_")
-    
-            # 5. Build raw profile (proc.cdf)
-            ok_prof <- TRUE
-            res_prof <- try({
-                this.prof <- proc.cdf(
-                    files[j],
-                    min.pres = min.pres, min.run = min.run, tol = mz.tol,
-                    baseline.correct = baseline.correct,
-                    baseline.correct.noise.percentile = baseline.correct.noise.percentile,
-                    do.plot = FALSE, intensity.weighted = intensity.weighted
-                )
-                # cache the output
-                save(this.prof, file = profile.name)
-                TRUE
-            }, silent = TRUE)
-    
-            if (inherits(res_prof, "try-error")) {
-                ok_prof <- FALSE
-                # quarantine problem file
-                try(file.copy(from = files[j], to = "error_files"), silent = TRUE)
-                try(file.remove(files[j]), silent = TRUE)
-            }
-    
-            # 6. If profile succeeded, run prof.to.features
-            if (ok_prof) {
-                res_feat <- try({
-                    this.feature <- prof.to.features(
-                        this.prof, min.bw = min.bw, max.bw = max.bw, sd.cut = sd.cut,
-                        shape.model = shape.model, estim.method = peak.estim.method,
-                        do.plot = FALSE, component.eliminate = component.eliminate,
-                        power = moment.power, BIC.factor = BIC.factor
-                    )
-                    # cache the output
-                    save(this.feature, file = feature.name)
-                    TRUE
-                }, silent = TRUE)
-    
-                if (inherits(res_feat, "try-error")) {
-                    try(file.copy(from = files[j], to = "error_files"), silent = TRUE)
-                    try(file.remove(files[j]), silent = TRUE)
-                }
-            }
-    
-            # return a tiny status list (keeps memory low)
-            list(file = files[j],
-                 profile_saved = ok_prof && !inherits(res_prof, "try-error"),
-                 feature_saved = ok_prof && !inherits(res_feat, "try-error"))
-        }
+        cl <- parallel::makeCluster(n.nodes)
+        registerDoParallel(cl)
+        clusterEvalQ(cl, library(apLCMS))
 
-        # ---- Progress + parallel apply over file indices ----
+        # initiate the progress bar for the feature detection step, as it usually takes a lot of time
         with_progress({
-            p <- progressor(steps = length(to.do))
+        p <- progressor(steps = length(to.do))
+            features <- foreach(i = 2:length(grps)) %dopar% {
+                this.subset <- to.do[(grps[i - 1] + 1):grps[i]]
+                for (j in this.subset) {
+                    # 5. Compose cache names; initialize local holders
+                    feature.name <- paste(strsplit(tolower(files[j]), "\\.")[[1]][1], suf, min.bw, max.bw, ".feature", sep = "_")
     
-            invisible(future_lapply(
-                to.do,
-                function(j) {
-                    out <- .process_one(
-                        j = j, files = files, suf = suf, suf.prof = suf.prof,
-                        min.pres = min.pres, min.run = min.run, mz.tol = mz.tol,
-                        baseline.correct = baseline.correct,
-                        baseline.correct.noise.percentile = baseline.correct.noise.percentile,
-                        intensity.weighted = intensity.weighted,
-                        min.bw = min.bw, max.bw = max.bw, sd.cut = sd.cut,
-                        shape.model = shape.model, peak.estim.method = peak.estim.method,
-                        component.eliminate = component.eliminate,
-                        moment.power = moment.power, BIC.factor = BIC.factor
-                    )
-                    p(sprintf("Processed %s", out$file))
-                    NULL
+                    this.feature <- NA
+                    profile.name <- paste(strsplit(tolower(files[j]), "\\.")[[1]][1], suf.prof, ".profile", sep = "_")
+    
+                    # 6. Build raw profile (proc.cdf); on error move file aside; else cache profile for reuse
+                    processable <- "goodgood"
+                    processable <- try(this.prof <- proc.cdf(files[j], min.pres = min.pres, min.run = min.run, tol = mz.tol, baseline.correct = baseline.correct, baseline.correct.noise.percentile = baseline.correct.noise.percentile, do.plot = FALSE, intensity.weighted = intensity.weighted))
+                    if (substr(processable, 1, 5) == "Error") {
+                        file.copy(from = files[j], to = "error_files")
+                        file.remove(files[j])
+                    } else {
+                        save(this.prof, file = profile.name)
+                    }
+    
+                    # 7. If raw profile succeeded, run prof.to.features; on error quarantine; else cache feature table
+                    if (substr(processable, 1, 5) != "Error") {
+                        processable.2 <- "goodgood"
+                        processable.2 <- try(this.feature <- prof.to.features(this.prof, min.bw = min.bw, max.bw = max.bw, sd.cut = sd.cut, shape.model = shape.model, estim.method = peak.estim.method, do.plot = FALSE, component.eliminate = component.eliminate, power = moment.power, BIC.factor = BIC.factor))
+    
+                        if (substr(processable.2, 1, 5) == "Error") {
+                            file.copy(from = files[j], to = "error_files")
+                            file.remove(files[j])
+                            this.feature <- NA
+                        } else {
+                            save(this.feature, file = feature.name )
+                        }
+                    }
+                    # Progress update
+                    p(sprintf("Processed %s", feature.name))
                 }
-            ))
-        })
+                ## suppress massive printing from %dopar%
+                NULL
+            }
+        })    
+        parallel::stopCluster(cl)
     }
-    
+
     # 8. Restrict to files with available outputs; load all feature tables into a list
     message("Loading the extracted feature tables from each sample into a list")
     all.files <- dir()
@@ -233,35 +186,20 @@ cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2
         is.done <- all.files[which(all.files == time.correction.name)]
 
         if (length(is.done) == 0) {
-            if (!requireNamespace("future", quietly = TRUE)) install.packages("future")
-            library(future)
-        
-            res <- value(future({
-                # Ensure package is available on the worker
-                suppressPackageStartupMessages(require(apLCMS, quietly = TRUE, character.only = TRUE))
-                st <- system.time({
-                    at <- adjust.time(
-                        features,
-                        mz.tol = align.mz.tol,
-                        chr.tol = align.chr.tol,
-                        find.tol.max.d = 10 * mz.tol,
-                        max.align.mz.diff = max.align.mz.diff
-                    )
-                })
-                list(f2 = at, elapsed = as.vector(st)[1])
-            }))
-        
-            message("***** correcting time, CPU time (seconds) ", res$elapsed)
-            f2 <- res$f2
+            cl <- parallel::makeCluster(n.nodes)
+            registerDoParallel(cl)
+
+            clusterEvalQ(cl, library(apLCMS))
+
+            message(c("***** correcting time, CPU time (seconds) ", as.vector(system.time(f2 <- adjust.time(features, mz.tol = align.mz.tol, chr.tol = align.chr.tol, find.tol.max.d = 10 * mz.tol, max.align.mz.diff = max.align.mz.diff)))[1]))
             save(f2, file = time.correction.name)
+            parallel::stopCluster(cl)
         } else {
             load(time.correction.name)
             message("Previously done time corrected feature table is loaded")
         }
-
-        # clear memory
         gc()
-        
+
         ###############################################################################################
         message("****************************  aligning features **************************************")
         # 10. Align features across profiles with feature.align(); cache alignment
@@ -269,8 +207,8 @@ cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2
         feature.alignment.name <- paste("aligned_done_", suf, ".bin", sep = "")
         all.files <- dir()
         is.done <- all.files[which(all.files == feature.alignment.name)]
-        
         if (length(is.done) == 0) {
+
             message(c("***** aligning features, CPU time (seconds): ", as.vector(system.time(aligned <- feature.align(f2, min.exp = min.exp, mz.tol = align.mz.tol, chr.tol = align.chr.tol, find.tol.max.d = 10 * mz.tol, max.align.mz.diff = max.align.mz.diff, n.nodes = n.nodes)))[1]))
             save(aligned, file = feature.alignment.name)
 
@@ -278,9 +216,39 @@ cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2
             load(feature.alignment.name)
             message("Previously done aligned feature table is loaded")
         }
-
-        # clear memory
         gc()
+
+        ################### debug codes
+        message("checking aligned features")
+        cat("Aligned dims:", dim(aligned$aligned.ftrs), "\n") 
+        str(aligned$aligned.ftrs[1:min(5,nrow(aligned$aligned.ftrs)), 1:min(10,ncol(aligned$aligned.ftrs))])
+
+        expected.cols <- 4 + length(files) 
+        actual.cols <- ncol(aligned$aligned.ftrs) 
+        if (expected.cols != actual.cols) cat("COLUMN MISMATCH: expected", expected.cols, "got", actual.cols, "\n")
+
+        aligned.sample.names <- colnames(aligned$aligned.ftrs)[-(1:4)]
+        length(files)                # should be 2489
+        length(aligned.sample.names) # should be 2487
+        
+        cat("Files length:", length(files), "Aligned sample columns:", length(aligned.sample.names), "\n")
+        
+        missing.from.aligned <- setdiff(files, aligned.sample.names)
+        extra.in.aligned     <- setdiff(aligned.sample.names, files)
+        
+        cat("In files but NOT in aligned columns:\n")
+        print(missing.from.aligned)
+        
+        cat("In aligned columns but NOT in files:\n")
+        print(extra.in.aligned)
+        
+        # Also show position of the missing ones in the files vector:
+        which(files %in% missing.from.aligned)
+        
+        message("checking individual feature files")
+        bad <- vapply(features, function(x) identical(x, NA), logical(1)) 
+        if (any(bad)) print(which(bad))
+        ##################
 
         ###############################################################################################
         message("**************************** recovering weaker signals *******************************")
@@ -294,73 +262,35 @@ cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2
 
         message(c("number of files to process: ", length(to.do)))
 
-        # ---- Recover weaker signals (future.apply + progressr for modern parellelization and debugging) ----
         if (length(to.do) > 0) {
+            cl <- parallel::makeCluster(n.nodes)
+            registerDoParallel(cl)
 
-            # To reduce repeated serialization, bind big objects to locals once
-            aligned_ftrs  <- aligned$aligned.ftrs
-            aligned_times <- aligned$pk.times
-            align_mz_tol  <- aligned$mz.tol
-            align_chr_tol <- aligned$chr.tol
+            clusterEvalQ(cl, library(apLCMS))
 
-            # helper: process a single index j
-            .recover_one <- function(j, files, suf,
-                                     aligned_ftrs, aligned_times, align_mz_tol, align_chr_tol,
-                                     features, f2,
-                                     recover_mz_range, recover_chr_range, use_observed_range,
-                                     mz_tol, min_bw, max_bw, recover_min_count) {
-        
-                # make sure apLCMS is available on workers
-                if (!"apLCMS" %in% loadedNamespaces()) {
-                    suppressPackageStartupMessages(require(apLCMS, quietly = TRUE, character.only = TRUE))
-                }
-        
-                feature.recover.name <- paste(strsplit(tolower(files[j]), "\\.")[[1]][1], suf, ".recover", sep = "_")
-                cat(feature.recover.name, "\n")
-        
-                this.recovered <- recover.weaker(
-                    filename = files[j], loc = j,
-                    aligned.ftrs = aligned_ftrs, pk.times = aligned_times,
-                    align.mz.tol = align_mz_tol, align.chr.tol = align_chr_tol,
-                    this.f1 = features[[j]], this.f2 = f2[[j]],
-                    mz.range = recover_mz_range, chr.range = recover_chr_range,
-                    use.observed.range = use_observed_range,
-                    orig.tol = mz_tol, min.bw = min_bw, max.bw = max_bw,
-                    bandwidth = .5, recover.min.count = recover_min_count
-                )
-        
-                save(this.recovered, file = feature.recover.name)
-                feature.recover.name
-            }
 
-            # initialize the parellel processing of recover.weaker function
+            # initiate the progress bar for the gap filling step, as it usually takes a lot of time
             with_progress({
                 p <- progressor(steps = length(to.do))
-
-                invisible(future_lapply(
-                    to.do,
-                    function(j) {
-                        out_name <- .recover_one(
-                            j = j, files = files, suf = suf,
-                            aligned_ftrs = aligned_ftrs, aligned_times = aligned_times,
-                            align_mz_tol = align_mz_tol, align_chr_tol = align_chr_tol,
-                            features = features, f2 = f2,
-                            recover_mz_range = recover.mz.range, recover_chr_range = recover.chr.range,
-                            use_observed_range = use.observed.range,
-                            mz_tol = mz.tol, min_bw = min.bw, max_bw = max.bw,
-                            recover_min_count = recover.min.count
-                        )
-                        p(sprintf("Processed %s", out_name))
-                        NULL
+                features.recov <- foreach(i = 2:length(grps)) %dopar% {
+                    this.subset <- to.do[(grps[i - 1] + 1):grps[i]]
+                    for (j in this.subset) {
+                        feature.recover.name <- paste(strsplit(tolower(files[j]), "\\.")[[1]][1], suf, ".recover", sep = "_")
+                        cat(feature.recover.name, "\n")
+                        this.recovered <- recover.weaker(filename = files[j], loc = j, aligned.ftrs = aligned$aligned.ftrs, pk.times = aligned$pk.times, align.mz.tol = aligned$mz.tol, align.chr.tol = aligned$chr.tol, this.f1 = features[[j]], this.f2 = f2[[j]], mz.range = recover.mz.range, chr.range = recover.chr.range, use.observed.range = use.observed.range, orig.tol = mz.tol, min.bw = min.bw, max.bw = max.bw, bandwidth = .5, recover.min.count = recover.min.count)
+                        save(this.recovered, file = feature.recover.name)
+                        
+                        # Progress update
+                        p(sprintf("Processed %s", feature.recover.name))
                     }
-                ))
+                    # suppress massive printing from %dopar%:
+                    NULL
+                }
             })
-
-            # clear memory
+            parallel::stopCluster(cl)
             gc()
-            
         }
-                      
+
         # 12. Build final alignment object by injecting recovered intensities/times; collect outputs for return
         new.aligned <- aligned
 
@@ -380,14 +310,10 @@ cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2
         ## remove aligned to save memory
         rm(aligned)
         gc()
-
-        # load all gap filled features
+        
         for (i in 1:length(files)) {
             feature.recover.name <- paste(strsplit(tolower(files[i]), "\\.")[[1]][1], suf, ".recover", sep = "_")
             load(feature.recover.name)
-            cat(feature.recover.name, "\n")
-
-            # add the gap filled features to the aligned feature table
             new.aligned$aligned.ftrs[, i + 4] <- this.recovered$this.ftrs
             new.aligned$pk.times[, i + 4] <- this.recovered$this.times
             new.aligned$features[[i]] <- this.recovered$this.f1
