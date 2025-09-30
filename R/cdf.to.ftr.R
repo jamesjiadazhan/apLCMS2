@@ -58,7 +58,7 @@ cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2
         install.packages("progressr")
     }
     library(progressr)
-    handlers(global = TRUE)
+
     
     # 2. Load dependencies; set working folder; enumerate candidate files and (optionally) subset
     library(mzR)
@@ -114,6 +114,8 @@ cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2
         registerDoParallel(cl)
         clusterEvalQ(cl, library(apLCMS))
 
+        handlers(global = TRUE)
+
         # initiate the progress bar for the feature detection step, as it usually takes a lot of time
         with_progress({
         p <- progressor(steps = length(to.do))
@@ -149,6 +151,9 @@ cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2
                             save(this.feature, file = feature.name )
                         }
                     }
+                    # log completion
+                    cat(sprintf("Completed:",feature.name, "\n"), file = logfile, append = TRUE)
+                    
                     # Progress update
                     p(sprintf("Processed %s", feature.name))
                 }
@@ -218,38 +223,6 @@ cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2
         }
         gc()
 
-        ################### debug codes
-        message("checking aligned features")
-        cat("Aligned dims:", dim(aligned$aligned.ftrs), "\n") 
-        str(aligned$aligned.ftrs[1:min(5,nrow(aligned$aligned.ftrs)), 1:min(10,ncol(aligned$aligned.ftrs))])
-
-        expected.cols <- 4 + length(files) 
-        actual.cols <- ncol(aligned$aligned.ftrs) 
-        if (expected.cols != actual.cols) cat("COLUMN MISMATCH: expected", expected.cols, "got", actual.cols, "\n")
-
-        aligned.sample.names <- colnames(aligned$aligned.ftrs)[-(1:4)]
-        length(files)                # should be 2489
-        length(aligned.sample.names) # should be 2487
-        
-        cat("Files length:", length(files), "Aligned sample columns:", length(aligned.sample.names), "\n")
-        
-        missing.from.aligned <- setdiff(files, aligned.sample.names)
-        extra.in.aligned     <- setdiff(aligned.sample.names, files)
-        
-        cat("In files but NOT in aligned columns:\n")
-        print(missing.from.aligned)
-        
-        cat("In aligned columns but NOT in files:\n")
-        print(extra.in.aligned)
-        
-        # Also show position of the missing ones in the files vector:
-        which(files %in% missing.from.aligned)
-        
-        message("checking individual feature files")
-        bad <- vapply(features, function(x) identical(x, NA), logical(1)) 
-        if (any(bad)) print(which(bad))
-        ##################
-
         ###############################################################################################
         message("**************************** recovering weaker signals *******************************")
         # 11. Weak-signal recovery around aligned features; cache per-file recoveries
@@ -265,9 +238,10 @@ cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2
         if (length(to.do) > 0) {
             cl <- parallel::makeCluster(n.nodes)
             registerDoParallel(cl)
-
             clusterEvalQ(cl, library(apLCMS))
 
+            # Enable progress reporting
+            handlers(global = TRUE)
 
             # initiate the progress bar for the gap filling step, as it usually takes a lot of time
             with_progress({
@@ -279,6 +253,9 @@ cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2
                         cat(feature.recover.name, "\n")
                         this.recovered <- recover.weaker(filename = files[j], loc = j, aligned.ftrs = aligned$aligned.ftrs, pk.times = aligned$pk.times, align.mz.tol = aligned$mz.tol, align.chr.tol = aligned$chr.tol, this.f1 = features[[j]], this.f2 = f2[[j]], mz.range = recover.mz.range, chr.range = recover.chr.range, use.observed.range = use.observed.range, orig.tol = mz.tol, min.bw = min.bw, max.bw = max.bw, bandwidth = .5, recover.min.count = recover.min.count)
                         save(this.recovered, file = feature.recover.name)
+
+                        # log completion
+                        cat(sprintf("Completed:",feature.recover.name, "\n"), file = logfile, append = TRUE)
                         
                         # Progress update
                         p(sprintf("Processed %s", feature.recover.name))
@@ -310,10 +287,18 @@ cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2
         ## remove aligned to save memory
         rm(aligned)
         gc()
-        
+
+        ## load gap filled features
+        message("loading gap filled features for each sample and append them to the aligned feature table")
         for (i in 1:length(files)) {
+            ## load gap filled features
             feature.recover.name <- paste(strsplit(tolower(files[i]), "\\.")[[1]][1], suf, ".recover", sep = "_")
             load(feature.recover.name)
+
+            # update the log file
+            cat(feature.recover.name, "\n")
+
+            # append gap filled features
             new.aligned$aligned.ftrs[, i + 4] <- this.recovered$this.ftrs
             new.aligned$pk.times[, i + 4] <- this.recovered$this.times
             new.aligned$features[[i]] <- this.recovered$this.f1
