@@ -121,10 +121,10 @@ cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2
                 this.subset <- to.do[(grps[i - 1] + 1):grps[i]]
                 for (j in this.subset) {
                     # 5. Compose cache names; initialize local holders
-                    this.name <- paste(strsplit(tolower(files[j]), "\\.")[[1]][1], suf, min.bw, max.bw, ".feature", sep = "_")
+                    feature.name <- paste(strsplit(tolower(files[j]), "\\.")[[1]][1], suf, min.bw, max.bw, ".feature", sep = "_")
     
                     this.feature <- NA
-                    that.name <- paste(strsplit(tolower(files[j]), "\\.")[[1]][1], suf.prof, ".profile", sep = "_")
+                    profile.name <- paste(strsplit(tolower(files[j]), "\\.")[[1]][1], suf.prof, ".profile", sep = "_")
     
                     # 6. Build raw profile (proc.cdf); on error move file aside; else cache profile for reuse
                     processable <- "goodgood"
@@ -133,7 +133,7 @@ cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2
                         file.copy(from = files[j], to = "error_files")
                         file.remove(files[j])
                     } else {
-                        save(this.prof, file = that.name)
+                        save(this.prof, file = profile.name)
                     }
     
                     # 7. If raw profile succeeded, run prof.to.features; on error quarantine; else cache feature table
@@ -146,11 +146,11 @@ cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2
                             file.remove(files[j])
                             this.feature <- NA
                         } else {
-                            save(this.feature, file = this.name)
+                            save(this.feature, file = feature.name )
                         }
                     }
                     # Progress update
-                    p(sprintf("Processed %s", files[j]))
+                    p(sprintf("Processed %s", feature.name))
                 }
                 ## suppress massive printing from %dopar%
                 NULL
@@ -167,9 +167,9 @@ cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2
 
     features <- new("list")
     for (i in 1:length(files)) {
-        this.name <- paste(strsplit(tolower(files[i]), "\\.")[[1]][1], suf, min.bw, max.bw, ".feature", sep = "_")
-        cat(this.name, "\n")
-        load(this.name)
+        feature.name <- paste(strsplit(tolower(files[i]), "\\.")[[1]][1], suf, min.bw, max.bw, ".feature", sep = "_")
+        cat(feature.name, "\n")
+        load(feature.name)
         features[[i]] <- this.feature
     }
 
@@ -180,10 +180,10 @@ cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2
         message("****************************** time correction ***************************************")
         # 9. Time correction across profiles using adjust.time(); cache the adjusted feature lists
         suf <- paste(suf, align.mz.tol, align.chr.tol, subs[1], subs[length(subs)], sep = "_")
-        this.name <- paste("time_correct_done_", suf, ".bin", sep = "")
+        time.correction.name <- paste("time_correct_done_", suf, ".bin", sep = "")
 
         all.files <- dir()
-        is.done <- all.files[which(all.files == this.name)]
+        is.done <- all.files[which(all.files == time.correction.name)]
 
         if (length(is.done) == 0) {
             cl <- parallel::makeCluster(n.nodes)
@@ -192,10 +192,10 @@ cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2
             clusterEvalQ(cl, library(apLCMS))
 
             message(c("***** correcting time, CPU time (seconds) ", as.vector(system.time(f2 <- adjust.time(features, mz.tol = align.mz.tol, chr.tol = align.chr.tol, find.tol.max.d = 10 * mz.tol, max.align.mz.diff = max.align.mz.diff)))[1]))
-            save(f2, file = this.name)
+            save(f2, file = time.correction.name)
             parallel::stopCluster(cl)
         } else {
-            load(this.name)
+            load(time.correction.name)
             message("Previously done time corrected feature table is loaded")
         }
         gc()
@@ -204,16 +204,16 @@ cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2
         message("****************************  aligning features **************************************")
         # 10. Align features across profiles with feature.align(); cache alignment
         suf <- paste(suf, min.exp, sep = "_")
-        this.name <- paste("aligned_done_", suf, ".bin", sep = "")
+        feature.alignment.name <- paste("aligned_done_", suf, ".bin", sep = "")
         all.files <- dir()
-        is.done <- all.files[which(all.files == this.name)]
+        is.done <- all.files[which(all.files == feature.alignment.name)]
         if (length(is.done) == 0) {
 
             message(c("***** aligning features, CPU time (seconds): ", as.vector(system.time(aligned <- feature.align(f2, min.exp = min.exp, mz.tol = align.mz.tol, chr.tol = align.chr.tol, find.tol.max.d = 10 * mz.tol, max.align.mz.diff = max.align.mz.diff, n.nodes = n.nodes)))[1]))
-            save(aligned, file = this.name)
+            save(aligned, file = feature.alignment.name)
 
         } else {
-            load(this.name)
+            load(feature.alignment.name)
             message("Previously done aligned feature table is loaded")
         }
         gc()
@@ -243,13 +243,13 @@ cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2
                 features.recov <- foreach(i = 2:length(grps)) %dopar% {
                     this.subset <- to.do[(grps[i - 1] + 1):grps[i]]
                     for (j in this.subset) {
-                        this.name <- paste(strsplit(tolower(files[j]), "\\.")[[1]][1], suf, ".recover", sep = "_")
-                        cat(this.name, "\n")
+                        feature.recover.name <- paste(strsplit(tolower(files[j]), "\\.")[[1]][1], suf, ".recover", sep = "_")
+                        cat(feature.recover.name, "\n")
                         this.recovered <- recover.weaker(filename = files[j], loc = j, aligned.ftrs = aligned$aligned.ftrs, pk.times = aligned$pk.times, align.mz.tol = aligned$mz.tol, align.chr.tol = aligned$chr.tol, this.f1 = features[[j]], this.f2 = f2[[j]], mz.range = recover.mz.range, chr.range = recover.chr.range, use.observed.range = use.observed.range, orig.tol = mz.tol, min.bw = min.bw, max.bw = max.bw, bandwidth = .5, recover.min.count = recover.min.count)
-                        save(this.recovered, file = this.name)
+                        save(this.recovered, file = feature.recover.name)
                         
                         # Progress update
-                        p(sprintf("Processed %s", files[j]))
+                        p(sprintf("Processed %s", feature.recover.name))
                     }
                     # suppress massive printing from %dopar%:
                     NULL
