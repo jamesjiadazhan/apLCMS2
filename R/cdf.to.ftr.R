@@ -227,6 +227,24 @@ cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2
         actual.cols <- ncol(aligned$aligned.ftrs) 
         if (expected.cols != actual.cols) cat("COLUMN MISMATCH: expected", expected.cols, "got", actual.cols, "\n")
 
+        aligned.sample.names <- colnames(aligned$aligned.ftrs)[-(1:4)]
+        length(files)                # should be 2489
+        length(aligned.sample.names) # should be 2487
+        
+        cat("Files length:", length(files), "Aligned sample columns:", length(aligned.sample.names), "\n")
+        
+        missing.from.aligned <- setdiff(files, aligned.sample.names)
+        extra.in.aligned     <- setdiff(aligned.sample.names, files)
+        
+        cat("In files but NOT in aligned columns:\n")
+        print(missing.from.aligned)
+        
+        cat("In aligned columns but NOT in files:\n")
+        print(extra.in.aligned)
+        
+        # Also show position of the missing ones in the files vector:
+        which(files %in% missing.from.aligned)
+        
         message("checking individual feature files")
         bad <- vapply(features, function(x) identical(x, NA), logical(1)) 
         if (any(bad)) print(which(bad))
