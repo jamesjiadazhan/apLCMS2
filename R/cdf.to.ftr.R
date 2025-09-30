@@ -85,7 +85,7 @@ cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2
     # open ONE connection and use it for both stdout and messages
     log_con <- file(logfile, open = "wt")  # or "at" if you truly want to append across runs
     sink(log_con, split = TRUE)            # stdout
-    sink(log_con, type = "message", split = TRUE)        # messages/warnings/errors
+    sink(log_con, type = "message")        # messages/warnings/errors
     
     # ensure sinks and connection are restored/closed on exit
     on.exit({
