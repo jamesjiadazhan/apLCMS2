@@ -218,6 +218,20 @@ cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2
         }
         gc()
 
+        ################### debug codes
+        message("checking aligned features")
+        cat("Aligned dims:", dim(aligned$aligned.ftrs), "\n") 
+        str(aligned$aligned.ftrs[1:min(5,nrow(aligned$aligned.ftrs)), 1:min(10,ncol(aligned$aligned.ftrs))])
+
+        expected.cols <- 4 + length(files) 
+        actual.cols <- ncol(aligned$aligned.ftrs) 
+        if (expected.cols != actual.cols) cat("COLUMN MISMATCH: expected", expected.cols, "got", actual.cols, "\n")
+
+        message("checking individual feature files")
+        bad <- vapply(features, function(x) identical(x, NA), logical(1)) 
+        if (any(bad)) print(which(bad))
+        ##################
+
         ###############################################################################################
         message("**************************** recovering weaker signals *******************************")
         # 11. Weak-signal recovery around aligned features; cache per-file recoveries
@@ -280,8 +294,8 @@ cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2
         gc()
         
         for (i in 1:length(files)) {
-            this.name <- paste(strsplit(tolower(files[i]), "\\.")[[1]][1], suf, ".recover", sep = "_")
-            load(this.name)
+            feature.recover.name <- paste(strsplit(tolower(files[i]), "\\.")[[1]][1], suf, ".recover", sep = "_")
+            load(feature.recover.name)
             new.aligned$aligned.ftrs[, i + 4] <- this.recovered$this.ftrs
             new.aligned$pk.times[, i + 4] <- this.recovered$this.times
             new.aligned$features[[i]] <- this.recovered$this.f1
