@@ -53,13 +53,6 @@
 # 1. Top-level pipeline: per-file preprocessing -> feature extraction -> (optional) time correction -> feature alignment -> recovery -> return tables
 cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2, min.pres = 0.5, min.run = 12, mz.tol = 1e-5, baseline.correct.noise.percentile = 0.05, shape.model = "bi-Gaussian", BIC.factor = 2, baseline.correct = 0, peak.estim.method = "moment", min.bw = NA, max.bw = NA, sd.cut = c(0.01, 500), sigma.ratio.lim = c(0.01, 100), component.eliminate = 0.01, moment.power = 1, subs = NULL, align.mz.tol = NA, align.chr.tol = NA, max.align.mz.diff = 0.01, pre.process = FALSE, recover.mz.range = NA, recover.chr.range = NA, use.observed.range = TRUE, recover.min.count = 3, intensity.weighted = FALSE) {
 
-    # set up a progress bar: this helps to track the running status for functions (they typically take a lot of time to run!)
-    if (!requireNamespace("progressr", quietly = TRUE)) {
-        install.packages("progressr")
-    }
-    library(progressr)
-
-    
     # 2. Load dependencies; set working folder; enumerate candidate files and (optionally) subset
     library(mzR)
     library(doParallel)
@@ -204,7 +197,6 @@ cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2
         if (length(is.done) == 0) {
             cl <- parallel::makeCluster(n.nodes)
             registerDoParallel(cl)
-
             clusterEvalQ(cl, library(apLCMS))
 
             message(c("***** correcting time, CPU time (seconds) ", as.vector(system.time(f2 <- adjust.time(features, mz.tol = align.mz.tol, chr.tol = align.chr.tol, find.tol.max.d = 10 * mz.tol, max.align.mz.diff = max.align.mz.diff)))[1]))
