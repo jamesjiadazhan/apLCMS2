@@ -119,7 +119,7 @@ cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2
         }
         
         # initiate the progress bar for the feature detection step, as it usually takes a lot of time
-        features <- foreach(i = 2:length(grps), .combine = com_progress, .init = integer(0)) %dopar% {
+        features <- foreach(i = 2:length(grps), .combine = comb_progress, .init = integer(0)) %dopar% {
             this.subset <- to.do[(grps[i - 1] + 1):grps[i]]
             for (j in this.subset) {
                 # 5. Compose cache names; initialize local holders
@@ -256,7 +256,7 @@ cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2
             
 
             # initiate the progress bar for the gap filling step, as it usually takes a lot of time
-            features.recov <- foreach(i = 2:length(grps), .combine = com_progress, .init = integer(0)) %dopar% {
+            features.recov <- foreach(i = 2:length(grps), .combine = comb_progress, .init = integer(0)) %dopar% {
                 this.subset <- to.do[(grps[i - 1] + 1):grps[i]]
                 for (j in this.subset) {
                     # prepare the gap filling file name
