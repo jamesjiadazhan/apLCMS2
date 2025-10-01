@@ -53,6 +53,11 @@
 # 1. Top-level pipeline: per-file preprocessing -> feature extraction -> (optional) time correction -> feature alignment -> recovery -> return tables
 cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2, min.pres = 0.5, min.run = 12, mz.tol = 1e-5, baseline.correct.noise.percentile = 0.05, shape.model = "bi-Gaussian", BIC.factor = 2, baseline.correct = 0, peak.estim.method = "moment", min.bw = NA, max.bw = NA, sd.cut = c(0.01, 500), sigma.ratio.lim = c(0.01, 100), component.eliminate = 0.01, moment.power = 1, subs = NULL, align.mz.tol = NA, align.chr.tol = NA, max.align.mz.diff = 0.01, pre.process = FALSE, recover.mz.range = NA, recover.chr.range = NA, use.observed.range = TRUE, recover.min.count = 3, intensity.weighted = FALSE) {
 
+    if (!requireNamespace("doSNOW", quietly = TRUE)) {
+        install.packages("doSNOW", dependencies = TRUE)
+    }
+    library(doSNOW)
+    
     # 2. Load dependencies; set working folder; enumerate candidate files and (optionally) subset
     library(mzR)
     library(doParallel)
@@ -103,69 +108,67 @@ cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2
         grps <- round(seq(0, length(to.do), length = n.nodes + 1))
         grps <- unique(grps)
 
+        message(c("number of CPU cores used: ", n.nodes))
+        chunks = length(grps) - 1L
+        message(c("number of chunks of files to process: ", chunks))
+        
         cl <- parallel::makeCluster(n.nodes)
-        registerDoParallel(cl)
+        registerDoSNOW(cl)
         clusterEvalQ(cl, library(apLCMS))
 
-        # Progress bar (simple base R)
-        pb <- txtProgressBar(min = 0, max = length(to.do), style = 3)
-        processed_so_far <- 0L
-
-        # Custom combiner: x = accumulated vector, y = newly returned integer
-        comb_progress <- function(x, y) {
-            processed_so_far <<- processed_so_far + y
-            setTxtProgressBar(pb, processed_so_far)
-            c(x, y)
-        }
+        # initiate the progress bar
+        pb <- txtProgressBar(min = 0, max = chunks, style = 3)
+        progress <- function(n) setTxtProgressBar(pb, n)
+        opts <- list(progress = progress)
         
         # initiate the progress bar for the feature detection step, as it usually takes a lot of time
-        features <- foreach(i = 2:length(grps), .combine = comb_progress, .init = integer(0)) %dopar% {
-            this.subset <- to.do[(grps[i - 1] + 1):grps[i]]
-            for (j in this.subset) {
-                # 5. Compose cache names; initialize local holders
-                feature.name <- paste(strsplit(tolower(files[j]), "\\.")[[1]][1], suf, min.bw, max.bw, ".feature", sep = "_")
-
-                this.feature <- NA
-                profile.name <- paste(strsplit(tolower(files[j]), "\\.")[[1]][1], suf.prof, ".profile", sep = "_")
-
-                # 6. Build raw profile (proc.cdf); on error move file aside; else cache profile for reuse
-                processable <- "goodgood"
-                processable <- try(this.prof <- proc.cdf(files[j], min.pres = min.pres, min.run = min.run, tol = mz.tol, baseline.correct = baseline.correct, baseline.correct.noise.percentile = baseline.correct.noise.percentile, do.plot = FALSE, intensity.weighted = intensity.weighted))
-                if (substr(processable, 1, 5) == "Error") {
-                    file.copy(from = files[j], to = "error_files")
-                    file.remove(files[j])
-                } else {
-                    save(this.prof, file = profile.name)
-                }
-
-                # 7. If raw profile succeeded, run prof.to.features; on error quarantine; else cache feature table
-                if (substr(processable, 1, 5) != "Error") {
-                    processable.2 <- "goodgood"
-                    processable.2 <- try(this.feature <- prof.to.features(this.prof, min.bw = min.bw, max.bw = max.bw, sd.cut = sd.cut, shape.model = shape.model, estim.method = peak.estim.method, do.plot = FALSE, component.eliminate = component.eliminate, power = moment.power, BIC.factor = BIC.factor))
-
-                    if (substr(processable.2, 1, 5) == "Error") {
+        invisible(
+            foreach(i = 2:length(grps), .options.snow = opts) %dopar% {
+                this.subset <- to.do[(grps[i - 1] + 1):grps[i]]
+                for (j in this.subset) {
+                    # 5. Compose cache names; initialize local holders
+                    feature.name <- paste(strsplit(tolower(files[j]), "\\.")[[1]][1], suf, min.bw, max.bw, ".feature", sep = "_")
+    
+                    this.feature <- NA
+                    profile.name <- paste(strsplit(tolower(files[j]), "\\.")[[1]][1], suf.prof, ".profile", sep = "_")
+    
+                    # 6. Build raw profile (proc.cdf); on error move file aside; else cache profile for reuse
+                    processable <- "goodgood"
+                    processable <- try(this.prof <- proc.cdf(files[j], min.pres = min.pres, min.run = min.run, tol = mz.tol, baseline.correct = baseline.correct, baseline.correct.noise.percentile = baseline.correct.noise.percentile, do.plot = FALSE, intensity.weighted = intensity.weighted))
+                    if (substr(processable, 1, 5) == "Error") {
                         file.copy(from = files[j], to = "error_files")
                         file.remove(files[j])
-                        this.feature <- NA
                     } else {
-                        save(this.feature, file = feature.name )
+                        save(this.prof, file = profile.name)
                     }
+    
+                    # 7. If raw profile succeeded, run prof.to.features; on error quarantine; else cache feature table
+                    if (substr(processable, 1, 5) != "Error") {
+                        processable.2 <- "goodgood"
+                        processable.2 <- try(this.feature <- prof.to.features(this.prof, min.bw = min.bw, max.bw = max.bw, sd.cut = sd.cut, shape.model = shape.model, estim.method = peak.estim.method, do.plot = FALSE, component.eliminate = component.eliminate, power = moment.power, BIC.factor = BIC.factor))
+    
+                        if (substr(processable.2, 1, 5) == "Error") {
+                            file.copy(from = files[j], to = "error_files")
+                            file.remove(files[j])
+                            this.feature <- NA
+                        } else {
+                            save(this.feature, file = feature.name )
+                        }
+                    }
+                    # log completion
+                    cat("Completed:", feature.name, "\n", file = logfile, append = TRUE)
                 }
-                # log completion
-                cat("Completed:", feature.name, "\n", file = logfile, append = TRUE)
-            }
-            # Return how many were processed in this chunk (drives progress)
-            length(this.subset)
-        }
-
-        # close the progress bar
-        close(pb)
-
-        # stop the parallel computing
-        parallel::stopCluster(cl)
-
-        # clear memory
-        gc()
+                NULL
+            })
+    
+            # close the progress bar
+            close(pb)
+    
+            # stop the parallel computing
+            parallel::stopCluster(cl)
+    
+            # clear memory
+            gc()
     }
 
     # 8. Restrict to files with available outputs; load all feature tables into a list
@@ -239,41 +242,41 @@ cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2
         message(c("number of files to process: ", length(to.do)))
 
         if (length(to.do) > 0) {
-            cl <- parallel::makeCluster(n.nodes)
-            registerDoParallel(cl)
-            clusterEvalQ(cl, library(apLCMS))
-
-            # Progress bar (simple base R)
-            pb <- txtProgressBar(min = 0, max = length(to.do), style = 3)
-            processed_so_far <- 0L
-
-            # Custom combiner: x = accumulated vector, y = newly returned integer
-            comb_progress <- function(x, y) {
-                processed_so_far <<- processed_so_far + y
-                setTxtProgressBar(pb, processed_so_far)
-                c(x, y)
-            }
+            message(c("number of CPU cores used: ", n.nodes))
+            chunks = length(grps) - 1L
+            message(c("number of chunks of files to process: ", chunks))
             
+            cl <- parallel::makeCluster(n.nodes)
+            registerDoSNOW(cl)
+            clusterEvalQ(cl, library(apLCMS))
+    
+            # initiate the progress bar
+            pb <- txtProgressBar(min = 0, max = chunks, style = 3)
+            progress <- function(n) setTxtProgressBar(pb, n)
+            opts <- list(progress = progress)
 
             # initiate the progress bar for the gap filling step, as it usually takes a lot of time
-            features.recov <- foreach(i = 2:length(grps), .combine = comb_progress, .init = integer(0)) %dopar% {
-                this.subset <- to.do[(grps[i - 1] + 1):grps[i]]
-                for (j in this.subset) {
-                    # prepare the gap filling file name
-                    feature.recover.name <- paste(strsplit(tolower(files[j]), "\\.")[[1]][1], suf, ".recover", sep = "_")
-
-                    # run the gap filling function
-                    this.recovered <- recover.weaker(filename = files[j], loc = j, aligned.ftrs = aligned$aligned.ftrs, pk.times = aligned$pk.times, align.mz.tol = aligned$mz.tol, align.chr.tol = aligned$chr.tol, this.f1 = features[[j]], this.f2 = f2[[j]], mz.range = recover.mz.range, chr.range = recover.chr.range, use.observed.range = use.observed.range, orig.tol = mz.tol, min.bw = min.bw, max.bw = max.bw, bandwidth = .5, recover.min.count = recover.min.count)
-
-                    # save the result as a cache file
-                    save(this.recovered, file = feature.recover.name)
-
-                    # log completion
-                    cat("Completed:", feature.recover.name, "\n", file = logfile, append = TRUE)
+            invisible(
+                foreach(i = 2:length(grps), .options.snow = opts) %dopar% {
+                    this.subset <- to.do[(grps[i - 1] + 1):grps[i]]
+                    for (j in this.subset) {
+                        # prepare the gap filling file name
+                        feature.recover.name <- paste(strsplit(tolower(files[j]), "\\.")[[1]][1], suf, ".recover", sep = "_")
+    
+                        # run the gap filling function
+                        this.recovered <- recover.weaker(filename = files[j], loc = j, aligned.ftrs = aligned$aligned.ftrs, pk.times = aligned$pk.times, align.mz.tol = aligned$mz.tol, align.chr.tol = aligned$chr.tol, this.f1 = features[[j]], this.f2 = f2[[j]], mz.range = recover.mz.range, chr.range = recover.chr.range, use.observed.range = use.observed.range, orig.tol = mz.tol, min.bw = min.bw, max.bw = max.bw, bandwidth = .5, recover.min.count = recover.min.count)
+    
+                        # save the result as a cache file
+                        save(this.recovered, file = feature.recover.name)
+    
+                        # log completion
+                        cat("Completed:", feature.recover.name, "\n", file = logfile, append = TRUE)
+                    }
+                    # Return how many were processed in this chunk (drives progress)
+                    NULL
                 }
-                # Return how many were processed in this chunk (drives progress)
-                length(this.subset)
-            }
+            )
+
 
             # close the progress bar
             close(pb)
