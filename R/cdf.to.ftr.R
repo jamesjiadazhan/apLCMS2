@@ -154,6 +154,7 @@ cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2
                     # log completion
                     cat("Completed:", feature.name, "\n", file = logfile, append = TRUE)
                     
+                    
                     # Progress update
                     p(sprintf("Processed %s", feature.name))
                 }
