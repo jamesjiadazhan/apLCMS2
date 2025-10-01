@@ -289,9 +289,9 @@ cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2
         #################################################################################################
         # 13. Final assembly of return list object consolidating raw, adjusted, aligned and recovered tables
         rec <- new("list")
-        colnames(aligned$aligned.ftrs) <- <- c("mz", "time", "mz.min", "mz.max", files)
-        colnames(aligned$pk.times) <- <- c("mz", "time", "mz.min", "mz.max", files)
-        colnames(new.aligned$aligned.ftrs) <- <- c("mz", "time", "mz.min", "mz.max", files)
+        colnames(aligned$aligned.ftrs) <- c("mz", "time", "mz.min", "mz.max", files)
+        colnames(aligned$pk.times) <- c("mz", "time", "mz.min", "mz.max", files)
+        colnames(new.aligned$aligned.ftrs) <- c("mz", "time", "mz.min", "mz.max", files)
         colnames(new.aligned$pk.times) <- c("mz", "time", "mz.min", "mz.max", files)
         
         rec$features <- new.aligned$features
