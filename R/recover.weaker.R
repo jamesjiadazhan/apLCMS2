@@ -35,26 +35,27 @@
 #'
  recover.weaker <- function(filename, loc, aligned.ftrs, pk.times, align.mz.tol, align.chr.tol, this.f1, this.f2, mz.range = NA, chr.range = NA, use.observed.range = TRUE, orig.tol = 1e-5, min.bw = NA, max.bw = NA, bandwidth = .5, recover.min.count = 3, intensity.weighted = FALSE) {
     # 1. Helper: remove exact duplicate rows (same mz, time, area) to keep table unique
-    duplicate.row.remove <- function(new.table) {
-        new.table <- new.table[order(new.table[, 1], new.table[, 2], new.table[, 5]), ]
-        n <- 1
-        m <- 2
-        to.remove <- rep(0, nrow(new.table))
-
-        while (m <= nrow(new.table)) {
-            if (abs(new.table[m, 1] - new.table[n, 1]) < 1e-10 & abs(new.table[m, 2] - new.table[n, 2]) < 1e-10 & abs(new.table[m, 5] - new.table[n, 5]) < 1e-10) {
-                to.remove[m] <- 1
-                m <- m + 1
-            } else {
-                n <- m
-                m <- m + 1
-            }
-        }
-
-        if (sum(to.remove) > 0) new.table <- new.table[-which(to.remove == 1), ]
-        new.table
+    duplicate.row.remove <- function(new.table, cols = c(1, 2, 5), tol = 1e-10) {
+        # Sort once by the key columns
+        ord <- do.call(order, lapply(cols, function(j) new.table[, j]))
+        x <- new.table[ord, , drop = FALSE]
+    
+        n <- nrow(x)
+        if (n <= 1L) return(x)
+    
+        # Compare each row to the previous row on the key columns
+        # A row is a duplicate if ALL key-column diffs are <= tol
+        diffs <- lapply(cols, function(j) {
+            dj <- abs(diff(x[, j])) <= tol
+            dj[is.na(dj)] <- FALSE             # treat NA comparisons as non-duplicates
+            c(FALSE, dj)                       # align with rows (first row has no previous)
+        })
+        dup <- Reduce("&", diffs)              # duplicate only if all keys match within tol
+    
+        x[!dup, , drop = FALSE]
     }
 
+  
     # 2. Load dependencies and determine default search windows if not provided
     library(splines)
     library(mzR)
