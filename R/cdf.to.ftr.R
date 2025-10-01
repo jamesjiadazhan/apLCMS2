@@ -279,6 +279,12 @@ cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2
             # update the log file
             cat(feature.recover.name, "\n")
 
+            if (length(this.recovered$this.ftrs) != nrow(aligned$aligned.ftrs)) {
+                message("Stale recovery cache (feature count mismatch). Recomputing: ", feature.recover.name)
+                this.recovered <- recover.weaker(filename = files[i], loc = i, aligned.ftrs = aligned$aligned.ftrs, pk.times = aligned$pk.times, align.mz.tol = aligned$mz.tol, align.chr.tol = aligned$chr.tol, this.f1 = features[[i]], this.f2 = f2[[i]], mz.range = recover.mz.range, chr.range = recover.chr.range, use.observed.range = use.observed.range, orig.tol = mz.tol, min.bw = min.bw, max.bw = max.bw, bandwidth = .5, recover.min.count = recover.min.count)
+                save(this.recovered, file = feature.recover.name)
+            }
+            
             # append gap filled features
             new.aligned$aligned.ftrs[, i + 4] <- this.recovered$this.ftrs
             new.aligned$pk.times[, i + 4] <- this.recovered$this.times
