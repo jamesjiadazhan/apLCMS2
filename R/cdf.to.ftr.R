@@ -53,11 +53,6 @@
 # 1. Top-level pipeline: per-file preprocessing -> feature extraction -> (optional) time correction -> feature alignment -> recovery -> return tables
 cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2, min.pres = 0.5, min.run = 12, mz.tol = 1e-5, baseline.correct.noise.percentile = 0.05, shape.model = "bi-Gaussian", BIC.factor = 2, baseline.correct = 0, peak.estim.method = "moment", min.bw = NA, max.bw = NA, sd.cut = c(0.01, 500), sigma.ratio.lim = c(0.01, 100), component.eliminate = 0.01, moment.power = 1, subs = NULL, align.mz.tol = NA, align.chr.tol = NA, max.align.mz.diff = 0.01, pre.process = FALSE, recover.mz.range = NA, recover.chr.range = NA, use.observed.range = TRUE, recover.min.count = 3, intensity.weighted = FALSE) {
 
-    if (!requireNamespace("doSNOW", quietly = TRUE)) {
-        install.packages("doSNOW", dependencies = TRUE)
-    }
-    library(doSNOW)
-    
     # 2. Load dependencies; set working folder; enumerate candidate files and (optionally) subset
     library(mzR)
     library(doParallel)
@@ -91,7 +86,6 @@ cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2
     }
 
     ###############################################################################################
-
     # 3. Prepare per-file work identifiers and suffixes for caching; create error bin for problem files
     dir.create("error_files")
     message("***************************** Feature detection and chromatogram building for each sample *****************************")
@@ -103,74 +97,111 @@ cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2
     to.do <- which(!(to.do %in% dir()))
     message(c("number of files to process: ", length(to.do)))
 
-    # 4. Parallel block: for each file, produce raw profile via proc.cdf(), then feature table via prof.to.features(); cache outputs
+    # 4. Parallel block (per-file granularity)
     if (length(to.do) > 0) {
-        grps <- round(seq(0, length(to.do), length = n.nodes + 1))
-        grps <- unique(grps)
-
         message(c("number of CPU cores used: ", n.nodes))
-        chunks = length(grps) - 1L
-        message(c("number of chunks of files to process: ", chunks))
-        
+
+        # Create cluster
         cl <- parallel::makeCluster(n.nodes)
-        registerDoSNOW(cl)
-        clusterEvalQ(cl, library(apLCMS))
+        on.exit(try(parallel::stopCluster(cl), silent = TRUE), add = TRUE)
 
-        # initiate the progress bar
-        pb <- txtProgressBar(min = 0, max = chunks, style = 3)
-        progress <- function(n) setTxtProgressBar(pb, n)
-        opts <- list(progress = progress)
-        
-        # initiate the progress bar for the feature detection step, as it usually takes a lot of time
-        invisible(
-            foreach(i = 2:length(grps), .options.snow = opts) %dopar% {
-                this.subset <- to.do[(grps[i - 1] + 1):grps[i]]
-                for (j in this.subset) {
-                    # 5. Compose cache names; initialize local holders
-                    feature.name <- paste(strsplit(tolower(files[j]), "\\.")[[1]][1], suf, min.bw, max.bw, ".feature", sep = "_")
-    
+        # Load needed package(s) on workers
+        parallel::clusterEvalQ(cl, {
+            library(apLCMS)
+            NULL
+        })
+
+        # Export scalar / small objects (large objects referenced by value already in parent env)
+        parallel::clusterExport(
+            cl,
+            varlist = c("files", "suf", "suf.prof", "min.pres", "min.run", "mz.tol",
+                        "baseline.correct", "baseline.correct.noise.percentile",
+                        "intensity.weighted", "min.bw", "max.bw", "sd.cut",
+                        "shape.model", "peak.estim.method", "component.eliminate",
+                        "moment.power", "BIC.factor", "logfile"),
+            envir = environment()
+        )
+
+        # Progress bar: one tick per file
+        pb <- txtProgressBar(min = 0, max = length(to.do), style = 3)
+        on.exit(try(close(pb), silent = TRUE), add = TRUE)
+        processed <- 0L
+
+        # Worker function (one file index j)
+        worker_fd_single <- function(j) {
+            feature.name <- paste(strsplit(tolower(files[j]), "\\.")[[1]][1],
+                                  suf, min.bw, max.bw, ".feature", sep = "_")
+            this.feature <- NA
+            profile.name <- paste(strsplit(tolower(files[j]), "\\.")[[1]][1],
+                                  suf.prof, ".profile", sep = "_")
+
+            # 6. Build raw profile
+            processable <- "goodgood"
+            processable <- try(
+                this.prof <- proc.cdf(
+                    files[j],
+                    min.pres = min.pres,
+                    min.run  = min.run,
+                    tol      = mz.tol,
+                    baseline.correct = baseline.correct,
+                    baseline.correct.noise.percentile = baseline.correct.noise.percentile,
+                    do.plot = FALSE,
+                    intensity.weighted = intensity.weighted
+                )
+            )
+
+            if (substr(processable, 1, 5) == "Error") {
+                file.copy(from = files[j], to = "error_files")
+                file.remove(files[j])
+            } else {
+                save(this.prof, file = profile.name)
+            }
+
+            # 7. Feature extraction if profile succeeded
+            if (substr(processable, 1, 5) != "Error") {
+                processable.2 <- "goodgood"
+                processable.2 <- try(
+                    this.feature <- prof.to.features(
+                        this.prof,
+                        min.bw = min.bw,
+                        max.bw = max.bw,
+                        sd.cut = sd.cut,
+                        shape.model = shape.model,
+                        estim.method = peak.estim.method,
+                        do.plot = FALSE,
+                        component.eliminate = component.eliminate,
+                        power = moment.power,
+                        BIC.factor = BIC.factor
+                    )
+                )
+
+                if (substr(processable.2, 1, 5) == "Error") {
+                    file.copy(from = files[j], to = "error_files")
+                    file.remove(files[j])
                     this.feature <- NA
-                    profile.name <- paste(strsplit(tolower(files[j]), "\\.")[[1]][1], suf.prof, ".profile", sep = "_")
-    
-                    # 6. Build raw profile (proc.cdf); on error move file aside; else cache profile for reuse
-                    processable <- "goodgood"
-                    processable <- try(this.prof <- proc.cdf(files[j], min.pres = min.pres, min.run = min.run, tol = mz.tol, baseline.correct = baseline.correct, baseline.correct.noise.percentile = baseline.correct.noise.percentile, do.plot = FALSE, intensity.weighted = intensity.weighted))
-                    if (substr(processable, 1, 5) == "Error") {
-                        file.copy(from = files[j], to = "error_files")
-                        file.remove(files[j])
-                    } else {
-                        save(this.prof, file = profile.name)
-                    }
-    
-                    # 7. If raw profile succeeded, run prof.to.features; on error quarantine; else cache feature table
-                    if (substr(processable, 1, 5) != "Error") {
-                        processable.2 <- "goodgood"
-                        processable.2 <- try(this.feature <- prof.to.features(this.prof, min.bw = min.bw, max.bw = max.bw, sd.cut = sd.cut, shape.model = shape.model, estim.method = peak.estim.method, do.plot = FALSE, component.eliminate = component.eliminate, power = moment.power, BIC.factor = BIC.factor))
-    
-                        if (substr(processable.2, 1, 5) == "Error") {
-                            file.copy(from = files[j], to = "error_files")
-                            file.remove(files[j])
-                            this.feature <- NA
-                        } else {
-                            save(this.feature, file = feature.name )
-                        }
-                    }
-                    # log completion
-                    cat("Completed:", feature.name, "\n", file = logfile, append = TRUE)
+                } else {
+                    save(this.feature, file = feature.name)
                 }
-                NULL
-            })
-    
-            # close the progress bar
-            close(pb)
-    
-            # stop the parallel computing
-            parallel::stopCluster(cl)
-    
-            # clear memory
-            gc()
-    }
+            }
 
+            # Log completion
+            cat("Completed:", feature.name, "\n", file = logfile, append = TRUE)
+
+            # Return a simple marker
+            1L
+        }
+
+        # Run per-file tasks with load balancing; parLapplyLB returns results as they finish
+        for (ret in parallel::parLapplyLB(cl, to.do, worker_fd_single)) {
+            processed <- processed + ret
+            setTxtProgressBar(pb, processed)
+        }
+
+        gc()
+    }
+    ###############################################################################################
+
+    ###############################################################################################
     # 8. Restrict to files with available outputs; load all feature tables into a list
     message("Loading the extracted feature tables from each sample into a list")
     all.files <- dir()
@@ -184,8 +215,9 @@ cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2
         load(feature.name)
         features[[i]] <- this.feature
     }
-
+    # clear memory
     gc()
+    ###############################################################################################
 
     if (!pre.process) {
         ###############################################################################################
@@ -209,7 +241,10 @@ cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2
             load(time.correction.name)
             message("Previously done time corrected feature table is loaded")
         }
+
+        # clear memory
         gc()
+        ###############################################################################################
 
         ###############################################################################################
         message("****************************  aligning features **************************************")
@@ -227,68 +262,180 @@ cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2
             load(feature.alignment.name)
             message("Previously done aligned feature table is loaded")
         }
+
+        # clear memory
         gc()
+        ###############################################################################################
+
 
         ###############################################################################################
+        ### --- Begin enhanced weak-signal recovery block (slice-only shipping, error-handled) ---
         message("**************************** recovering weaker signals *******************************")
-        # 11. Weak-signal recovery around aligned features; cache per-file recoveries
         suf <- paste(suf, recover.mz.range, recover.chr.range, use.observed.range, sep = "_")
-
-        worklist <- paste(matrix(unlist(strsplit(tolower(files), "\\.")), nrow = 2)[1, ], suf, ".recover", sep = "_")
+        
+        # Build expected recovery output names
+        worklist <- paste(
+            matrix(unlist(strsplit(tolower(files), "\\.")), nrow = 2)[1, ],
+            suf, ".recover", sep = "_"
+        )
         to.do <- which(!(worklist %in% dir()))
-        grps <- round(seq(0, length(to.do), length = n.nodes + 1))
-        grps <- unique(grps)
-
-        message(c("number of files to process: ", length(to.do)))
-
+        message("number of files to process: ", length(to.do))
+        
         if (length(to.do) > 0) {
-            message(c("number of CPU cores used: ", n.nodes))
-            chunks = length(grps) - 1L
-            message(c("number of chunks of files to process: ", chunks))
-            
-            cl <- parallel::makeCluster(n.nodes)
-            registerDoSNOW(cl)
-            clusterEvalQ(cl, library(apLCMS))
-    
-            # initiate the progress bar
-            pb <- txtProgressBar(min = 0, max = chunks, style = 3)
-            progress <- function(n) setTxtProgressBar(pb, n)
-            opts <- list(progress = progress)
-
-            # initiate the progress bar for the gap filling step, as it usually takes a lot of time
-            invisible(
-                foreach(i = 2:length(grps), .options.snow = opts) %dopar% {
-                    this.subset <- to.do[(grps[i - 1] + 1):grps[i]]
-                    for (j in this.subset) {
-                        # prepare the gap filling file name
-                        feature.recover.name <- paste(strsplit(tolower(files[j]), "\\.")[[1]][1], suf, ".recover", sep = "_")
-    
-                        # run the gap filling function
-                        this.recovered <- recover.weaker(filename = files[j], loc = j, aligned.ftrs = aligned$aligned.ftrs, pk.times = aligned$pk.times, align.mz.tol = aligned$mz.tol, align.chr.tol = aligned$chr.tol, this.f1 = features[[j]], this.f2 = f2[[j]], mz.range = recover.mz.range, chr.range = recover.chr.range, use.observed.range = use.observed.range, orig.tol = mz.tol, min.bw = min.bw, max.bw = max.bw, bandwidth = .5, recover.min.count = recover.min.count)
-    
-                        # save the result as a cache file
-                        save(this.recovered, file = feature.recover.name)
-    
-                        # log completion
-                        cat("Completed:", feature.recover.name, "\n", file = logfile, append = TRUE)
-                    }
-                    # Return how many were processed in this chunk (drives progress)
-                    NULL
-                }
+            message("number of CPU cores used: ", n.nodes)
+        
+            # Slim alignment container – only what recover.weaker actually needs
+            aligned.slim <- list(
+                aligned.ftrs = aligned$aligned.ftrs,
+                pk.times     = aligned$pk.times,
+                mz.tol       = aligned$mz.tol,
+                chr.tol      = aligned$chr.tol
             )
-
-
-            # close the progress bar
-            close(pb)
-
-            # stop the parellel computing
-            parallel::stopCluster(cl)
-
-            # clear memory
+        
+            # Build per-file task objects (each holds only the slice of interest)
+            tasks <- lapply(to.do, function(j) {
+                list(
+                    j        = j,
+                    filename = files[j],
+                    f1       = features[[j]],
+                    f2       = f2[[j]],
+                    out      = worklist[j]
+                )
+            })
+        
+            # Start cluster
+            cl <- parallel::makeCluster(n.nodes)
+            on.exit(try(parallel::stopCluster(cl), silent = TRUE), add = TRUE)
+        
+            # Load package(s) once on each worker
+            parallel::clusterEvalQ(cl, {
+                library(apLCMS)
+                NULL
+            })
+        
+            # Export only scalar / small objects needed by every task
+            parallel::clusterExport(
+                cl,
+                varlist = c(
+                    "aligned.slim",
+                    "recover.mz.range", "recover.chr.range",
+                    "use.observed.range", "mz.tol",
+                    "min.bw", "max.bw", "recover.min.count"
+                ),
+                envir = environment()
+            )
+        
+            # Progress bar
+            pb <- txtProgressBar(min = 0, max = length(tasks), style = 3)
+            on.exit(try(close(pb), silent = TRUE), add = TRUE)
+            completed <- 0L
+        
+            # To accumulate results (including failures)
+            results <- vector("list", length(tasks))
+        
+            # Worker function: receives exactly ONE task (only that slice is serialized)
+            worker_fun <- function(task) {
+                j        <- task$j
+                filename <- task$filename
+                this.f1  <- task$f1
+                this.f2  <- task$f2
+                outname  <- task$out
+        
+                # Encapsulate recovery in tryCatch to record errors / warnings
+                ans <- tryCatch({
+                    this.recovered <- recover.weaker(
+                        filename           = filename,
+                        loc                = j,
+                        aligned.ftrs       = aligned.slim$aligned.ftrs,
+                        pk.times           = aligned.slim$pk.times,
+                        align.mz.tol       = aligned.slim$mz.tol,
+                        align.chr.tol      = aligned.slim$chr.tol,
+                        this.f1            = this.f1,
+                        this.f2            = this.f2,
+                        mz.range           = recover.mz.range,
+                        chr.range          = recover.chr.range,
+                        use.observed.range = use.observed.range,
+                        orig.tol           = mz.tol,
+                        min.bw             = min.bw,
+                        max.bw             = max.bw,
+                        bandwidth          = 0.5,
+                        recover.min.count  = recover.min.count
+                    )
+        
+                    save(this.recovered, file = outname)
+        
+                    list(j = j, ok = TRUE, out = outname, error = NA_character_, warning = NA_character_)
+                },
+                warning = function(w) {
+                    warnfile <- paste0(outname, ".warn.txt")
+                    msg <- paste0(
+                        format(Sys.time(), "%Y-%m-%d %H:%M:%S"),
+                        " RECOVERY_WARNING index=", j,
+                        " file=", filename, " : ", conditionMessage(w), "\n"
+                    )
+                    cat(msg, file = warnfile, append = TRUE)
+                    # Muffle the warning but still report status
+                    invokeRestart("muffleWarning")
+                    list(j = j, ok = TRUE, out = outname, error = NA_character_, warning = conditionMessage(w))
+                },
+                error = function(e) {
+                    errfile <- paste0(outname, ".error.txt")
+                    msg <- paste0(
+                        format(Sys.time(), "%Y-%m-%d %H:%M:%S"),
+                        " RECOVERY_ERROR index=", j,
+                        " file=", filename, " : ", conditionMessage(e), "\n"
+                    )
+                    cat(msg, file = errfile, append = TRUE)
+                    list(j = j, ok = FALSE, out = outname, error = conditionMessage(e), warning = NA_character_)
+                })
+        
+                ans
+            }
+        
+            # Load-balanced apply; each task ships only its slice
+            idx <- 0L
+            for (res in parallel::parLapplyLB(cl, tasks, worker_fun)) {
+                idx <- idx + 1L
+                results[[idx]] <- res
+                setTxtProgressBar(pb, idx)
+            }
+        
+            # Summarize failures (if any)
+            status.df <- do.call(rbind, lapply(results, function(x) {
+                if (is.null(x)) return(data.frame(j = NA_integer_, ok = FALSE, error = "UNKNOWN", warning = NA_character_))
+                data.frame(
+                    j        = x$j,
+                    ok       = x$ok,
+                    error    = x$error,
+                    warning  = x$warning,
+                    stringsAsFactors = FALSE
+                )
+            }))
+        
+            failed <- status.df[!status.df$ok, , drop = FALSE]
+            if (nrow(failed) > 0) {
+                message("Weak-signal recovery: ", nrow(failed), " file(s) failed. Indices: ",
+                        paste(failed$j, collapse = ", "))
+                # Optional: write a consolidated failure log
+                fail.log <- "recover.weaker_failures.log"
+                write.table(
+                    failed,
+                    file = fail.log,
+                    quote = FALSE,
+                    sep = "\t",
+                    row.names = FALSE
+                )
+                message("Failure details written to: ", fail.log)
+            } else {
+                message("Weak-signal recovery finished without fatal errors.")
+            }
+        
             gc()
         }
+        ### --- End enhanced weak-signal recovery block ---
+        ###############################################################################################
 
-
+        ###############################################################################################
         # 12. Build final alignment object by injecting recovered intensities/times; collect outputs for return
         new.aligned <- aligned
         for (i in 1:length(files)) {
@@ -315,6 +462,7 @@ cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2
             new.aligned$features[[i]] <- this.recovered$this.f1
             new.aligned$f2[[i]] <- this.recovered$this.f2
         }
+        ###############################################################################################
 
         #################################################################################################
         # 13. Final assembly of return list object consolidating raw, adjusted, aligned and recovered tables
