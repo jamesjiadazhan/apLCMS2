@@ -53,6 +53,12 @@
 # 1. Top-level pipeline: per-file preprocessing -> feature extraction -> (optional) time correction -> feature alignment -> recovery -> return tables
 cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2, min.pres = 0.5, min.run = 12, mz.tol = 1e-5, baseline.correct.noise.percentile = 0.05, shape.model = "bi-Gaussian", BIC.factor = 2, baseline.correct = 0, peak.estim.method = "moment", min.bw = NA, max.bw = NA, sd.cut = c(0.01, 500), sigma.ratio.lim = c(0.01, 100), component.eliminate = 0.01, moment.power = 1, subs = NULL, align.mz.tol = NA, align.chr.tol = NA, max.align.mz.diff = 0.01, pre.process = FALSE, recover.mz.range = NA, recover.chr.range = NA, use.observed.range = TRUE, recover.min.count = 3, intensity.weighted = FALSE) {
 
+    # Install pbapply if not already installed
+    if (!requireNamespace("pbapply", quietly = TRUE)) {
+      install.packages("pbapply")
+    }
+    library(pbapply)
+    
     # 2. Load dependencies; set working folder; enumerate candidate files and (optionally) subset
     library(mzR)
     library(doParallel)
@@ -122,13 +128,8 @@ cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2
             envir = environment()
         )
 
-        # Progress bar: one tick per file
-        pb <- txtProgressBar(min = 0, max = length(to.do), style = 3)
-        on.exit(try(close(pb), silent = TRUE), add = TRUE)
-        processed <- 0L
-
         # Worker function (one file index j)
-        worker_fd_single <- function(j) {
+        feature_detection_single <- function(j) {
             feature.name <- paste(strsplit(tolower(files[j]), "\\.")[[1]][1],
                                   suf, min.bw, max.bw, ".feature", sep = "_")
             this.feature <- NA
@@ -188,13 +189,12 @@ cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2
             list(feature = feature.name, ok = TRUE)
         }
 
-        # Run per-file tasks with load balancing; parLapplyLB returns results as they finish
-        for (ret in parallel::parLapplyLB(cl, to.do, worker_fd_single)) {
-            processed <- processed + 1L
-            # update the progress bar
-            setTxtProgressBar(pb, processed)
-            # 2. then log/print
-            cat("Completed:", ret$feature, "\n", file = logfile, append = TRUE)  
+        # run with live progress
+        res <- pblapply(to.do, feature_detection_single, cl = cl)
+        
+        # log once per returned item (this prints as soon as each chunk is processed)
+        for (ret in res) {
+          cat("Completed:", ret$feature, "\n", file = logfile, append = TRUE)
         }
 
         gc()
