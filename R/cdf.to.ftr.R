@@ -184,17 +184,17 @@ cdf.to.ftr <- function(folder, file.pattern = ".mzXML", n.nodes = 4, min.exp = 2
                 }
             }
 
-            # Log completion
-            cat("Completed:", feature.name, "\n", file = logfile, append = TRUE)
-
-            # Return a simple marker
-            1L
+            # (No cat() here: logging is done after progress bar update in master)
+            list(feature = feature.name, ok = TRUE)
         }
 
         # Run per-file tasks with load balancing; parLapplyLB returns results as they finish
         for (ret in parallel::parLapplyLB(cl, to.do, worker_fd_single)) {
-            processed <- processed + ret
+            processed <- processed + 1L
+            # update the progress bar
             setTxtProgressBar(pb, processed)
+            # 2. then log/print
+            cat("Completed:", ret$feature, "\n", file = logfile, append = TRUE)  
         }
 
         gc()
